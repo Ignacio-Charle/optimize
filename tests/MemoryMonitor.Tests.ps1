@@ -1,19 +1,28 @@
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot '..\MemoryMonitor.ps1')
 
 Describe 'MemoryMonitor metrics and boundaries' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot '..\MemoryMonitor.ps1')
+    }
+
     It 'converts KiB to exact 64-bit bytes and used percent' {
         $ram = Convert-RamMeasurement -TotalVisibleKiB 1048576 -AvailableKiB 262144
-        $ram.TotalBytes | Should Be 1073741824
-        $ram.AvailableBytes | Should Be 268435456
-        $ram.UsedBytes | Should Be 805306368
-        $ram.UsedPct | Should Be 75.0
+        if ($ram.TotalBytes -ne 1073741824) { throw 'bytes total incorrectos' }
+        if ($ram.AvailableBytes -ne 268435456) { throw 'bytes disponibles incorrectos' }
+        if ($ram.UsedBytes -ne 805306368) { throw 'bytes usados incorrectos' }
+        if ($ram.UsedPct -ne 75.0) { throw 'porcentaje usado incorrecto' }
     }
 
     It 'rejects invalid RAM measurements instead of publishing zero' {
-        { Convert-RamMeasurement -TotalVisibleKiB 0 -AvailableKiB 0 } | Should Throw
-        { Convert-RamMeasurement -TotalVisibleKiB 100 -AvailableKiB 101 } | Should Throw
-        { Convert-RamMeasurement -TotalVisibleKiB 100 -AvailableKiB -1 } | Should Throw
+        foreach ($case in @(
+            { Convert-RamMeasurement -TotalVisibleKiB 0 -AvailableKiB 0 },
+            { Convert-RamMeasurement -TotalVisibleKiB 100 -AvailableKiB 101 },
+            { Convert-RamMeasurement -TotalVisibleKiB 100 -AvailableKiB -1 }
+        )) {
+            $threw = $false
+            try { & $case } catch { $threw = $true }
+            if (-not $threw) { throw 'una medición inválida no fue rechazada' }
+        }
     }
 
     It 'rejects a sibling with the same textual prefix' {
@@ -23,7 +32,7 @@ Describe 'MemoryMonitor metrics and boundaries' {
         New-Item -ItemType Directory -Path $root -Force | Out-Null
         New-Item -ItemType Directory -Path $sibling -Force | Out-Null
         try {
-            Test-PathWithinRoot -Path (Join-Path $sibling 'sentinel.tmp') -Root $root | Should Be $false
+            if (Test-PathWithinRoot -Path (Join-Path $sibling 'sentinel.tmp') -Root $root) { throw 'se aceptó un prefijo hermano' }
         } finally {
             Remove-Item -LiteralPath $parent -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -31,6 +40,10 @@ Describe 'MemoryMonitor metrics and boundaries' {
 }
 
 Describe 'HTML export' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot '..\MemoryMonitor.ps1')
+    }
+
     It 'generates an offline HTML report with synthetic special-character text escaped' {
         $temp = Join-Path ([IO.Path]::GetTempPath()) ('mm-html-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $temp -Force | Out-Null
@@ -39,9 +52,9 @@ Describe 'HTML export' {
             $script = Join-Path $PSScriptRoot '..\Generate-ReportHtml.ps1'
             & $script -SyntheticExample -OutputHtml $out
             $html = [IO.File]::ReadAllText($out)
-            $html | Should Match 'Content-Security-Policy'
-            $html | Should Match 'Dato ausente'
-            $html | Should Match 'ejemplo sintético'
+            if ($html -notmatch 'Content-Security-Policy') { throw 'falta CSP' }
+            if ($html -notmatch 'Dato ausente') { throw 'falta estado vacío/parcial' }
+            if ($html -notmatch 'ejemplo sintético') { throw 'falta contenido sintético' }
         } finally {
             Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -71,8 +84,8 @@ Describe 'HTML export' {
 
                 & (Join-Path $PSScriptRoot '..\Generate-ReportHtml.ps1') -InputJson $json -OutputHtml $out
                 $html = [IO.File]::ReadAllText($out)
-                $html | Should Not Match '<img\s'
-                $html | Should Match '&lt;img'
+                if ($html -match '<img\s') { throw 'se interpretó markup sin confiar' }
+                if ($html -notmatch '&lt;img') { throw 'el dato sintético no fue escapado' }
             } finally {
                 Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
             }
