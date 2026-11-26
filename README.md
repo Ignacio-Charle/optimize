@@ -1,8 +1,17 @@
 # Informe de memoria del PC
 
-PowerShell 5.1 compatible. La ejecución manual predeterminada es solo de informe; el resultado legible se guarda en `reports\latest-report.md` y el historial JSONL rotado en `reports\history.jsonl`.
+[![Windows tests](https://github.com/Ignacio-Charle/windows-memory-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/Ignacio-Charle/windows-memory-monitor/actions/workflows/ci.yml)
 
-También se generan `reports/latest-report.json` (estado y métricas con unidades) y `reports/latest-report.html` (visor local autónomo, sin servidor y sin recursos externos). `latest-report.html` usa una CSP restrictiva y no ejecuta JavaScript.
+Diagnóstico local de Windows 11 para RAM, CPU y disco, con historial y limpieza opt-in. PowerShell 5.1 compatible.
+
+## Qué genera
+
+- `reports/latest-report.md`: informe legible.
+- `reports/latest-report.json`: datos estructurados con estado de colectores y unidades inequívocas.
+- `reports/latest-report.html`: visor autónomo, responsivo y sin JavaScript.
+- `reports/history.jsonl`: historial local rotado; no se incluye en Git.
+
+La ejecución predeterminada es de solo informe. Nunca elimina archivos fuera de la política configurada.
 
 ## Uso
 
@@ -15,6 +24,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\MemoryMonitor.ps1 -Mod
 
 # Limpieza real manual, limitada por ruta validada, edad, exclusiones y omisión de reparse points
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\MemoryMonitor.ps1 -Mode Clean
+
+# Vista previa sin borrado
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\MemoryMonitor.ps1 -Mode Clean -WhatIf
 
 # Pruebas de limpieza sobre carpetas temporales controladas
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Cleanup.Tests.ps1

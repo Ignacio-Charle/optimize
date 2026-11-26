@@ -58,6 +58,13 @@ $cpu = if ($null -ne $report.collectors.cpu.usedPct) { '{0:N1}% durante {1} s' -
 $disk = if ($null -ne $report.collectors.disk.freePct) { '{0:N1}% libre de {1:N2} GiB' -f [double]$report.collectors.disk.freePct,([double]$report.collectors.disk.totalBytes / 1GB) } else { 'Dato ausente' }
 $staleText = if ([bool]$report.stale) { 'ANTIGUO' } else { 'Actual' }
 $statusText = [string]$report.status
+$localTimeText = try {
+    ([datetimeoffset]::Parse([string]$report.timestampUtc).LocalDateTime.ToString('yyyy-MM-dd HH:mm:ss'))
+} catch { 'No disponible' }
+$ramTotalGiB = if ($null -ne $report.collectors.ram.totalBytes) { [math]::Round([double]$report.collectors.ram.totalBytes / 1GB, 2) } else { $null }
+$ramAvailableGiB = if ($null -ne $report.collectors.ram.availableBytes) { [math]::Round([double]$report.collectors.ram.availableBytes / 1GB, 2) } else { $null }
+$diskTotalGiB = if ($null -ne $report.collectors.disk.totalBytes) { [math]::Round([double]$report.collectors.disk.totalBytes / 1GB, 2) } else { $null }
+$diskFreeGiB = if ($null -ne $report.collectors.disk.freeBytes) { [math]::Round([double]$report.collectors.disk.freeBytes / 1GB, 2) } else { $null }
 
 $html = @"
 <!doctype html>
@@ -68,40 +75,98 @@ $html = @"
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
 <title>Informe de memoria del PC</title>
 <style>
-:root { color-scheme: light dark; font-family: Segoe UI, Arial, sans-serif; }
-body { max-width: 64rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
-.status { border-left: 0.35rem solid #777; padding: 0.5rem 1rem; }
-.ok { border-left-color: #16833b; }
-.partial { border-left-color: #b26a00; }
-.failed { border-left-color: #b00020; }
-table { width: 100%; border-collapse: collapse; }
-th, td { border: 1px solid #777; padding: 0.5rem; text-align: left; }
-caption { text-align: left; font-weight: 700; margin-bottom: 0.25rem; }
-:focus-visible { outline: 3px solid #0067b8; outline-offset: 2px; }
-@media (max-width: 42rem) { table, tbody, tr, th, td { display: block; } th { margin-top: 0.5rem; } }
+:root {
+  color-scheme: light dark;
+  --canvas: #0b1220;
+  --surface: #111b2d;
+  --text: #edf3ff;
+  --muted: #aab7ca;
+  --line: #314158;
+  --ok: #62d6a4;
+  --warn: #ffc66d;
+  --bad: #ff8e99;
+  --focus: #85b8ff;
+  font-family: "Segoe UI Variable Text", "Segoe UI", Arial, sans-serif;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --canvas: #f4f7fb;
+    --surface: #ffffff;
+    --text: #172033;
+    --muted: #536176;
+    --line: #ccd5e3;
+    --ok: #087a45;
+    --warn: #8a5700;
+    --bad: #a12636;
+    --focus: #005fcc;
+  }
+}
+* { box-sizing: border-box; }
+body { max-width: 68rem; margin: 0 auto; padding: clamp(1.25rem, 4vw, 3rem); background: var(--canvas); color: var(--text); line-height: 1.55; }
+main { min-width: 0; }
+h1 { margin: 0 0 0.4rem; font-size: clamp(1.75rem, 5vw, 3rem); line-height: 1.08; letter-spacing: -0.035em; }
+h2 { margin: 2rem 0 0.65rem; font-size: 1.15rem; }
+.meta { color: var(--muted); margin: 0 0 1.5rem; }
+.status { margin: 0 0 1.5rem; padding: 0.75rem 0; font-weight: 650; }
+.status .label { display: inline-block; min-width: 6.5rem; }
+.status.ok .label { color: var(--ok); }
+.status.partial .label { color: var(--warn); }
+.status.failed .label { color: var(--bad); }
+.resource-table { width: 100%; border-collapse: collapse; background: var(--surface); }
+.resource-table th, .resource-table td { border-bottom: 1px solid var(--line); padding: 0.85rem 1rem; text-align: left; overflow-wrap: anywhere; }
+.resource-table thead th { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.resource-table tbody th { width: 22%; }
+.resource-table tr:last-child th, .resource-table tr:last-child td { border-bottom: 0; }
+.value { font-variant-numeric: tabular-nums; font-weight: 700; }
+.cleanup, .diagnostics { background: var(--surface); padding: 1rem; }
+.cleanup p, .diagnostics p, .diagnostics li { overflow-wrap: anywhere; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+@media (max-width: 42rem) {
+  body { padding: 1rem; }
+  .resource-table, .resource-table tbody, .resource-table tr { display: block; }
+  .resource-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .resource-table tr { border-bottom: 1px solid var(--line); }
+  .resource-table tr:last-child { border-bottom: 0; }
+  .resource-table tbody th, .resource-table td { display: block; width: 100%; border: 0; padding: 0.45rem 1rem; }
+  .resource-table tbody th { padding-top: 0.85rem; }
+  .resource-table td:last-child { padding-bottom: 0.85rem; }
+}
+@media (forced-colors: active) {
+  :root { --canvas: Canvas; --surface: Canvas; --text: CanvasText; --muted: CanvasText; --line: CanvasText; --ok: LinkText; --warn: LinkText; --bad: LinkText; --focus: Highlight; }
+  .resource-table, .cleanup, .diagnostics { border: 1px solid CanvasText; }
+}
+@media print {
+  :root { color-scheme: light; --canvas: #fff; --surface: #fff; --text: #000; --muted: #333; --line: #999; }
+  body { max-width: none; padding: 0; }
+  .cleanup, .diagnostics { border: 1px solid #999; }
+}
 </style>
 </head>
 <body>
 <main>
 <h1 tabindex="-1">Informe de memoria del PC</h1>
-<p class="status $(ConvertTo-HtmlText $statusText)">Estado: <strong>$(ConvertTo-HtmlText $statusText)</strong> · Datos: <strong>$staleText</strong></p>
-<p>Hora UTC de la muestra: <time datetime="$(ConvertTo-HtmlText $report.timestampUtc)">$(ConvertTo-HtmlText $report.timestampUtc)</time></p>
-<table>
+<p class="meta"><time datetime="$(ConvertTo-HtmlText $report.timestampUtc)">$(ConvertTo-HtmlText $localTimeText)</time> (hora local) - <time datetime="$(ConvertTo-HtmlText $report.timestampUtc)">$(ConvertTo-HtmlText $report.timestampUtc)</time> UTC</p>
+<p class="status $(ConvertTo-HtmlText $statusText)"><span class="label">$(ConvertTo-HtmlText $statusText)</span> Datos: <strong>$staleText</strong></p>
+<table class="resource-table">
 <caption>Resumen de recursos</caption>
 <thead><tr><th scope="col">Recurso</th><th scope="col">Estado</th><th scope="col">Valor</th></tr></thead>
 <tbody>
-<tr><th scope="row">RAM</th><td>$(ConvertTo-HtmlText $ramStatus)</td><td>$ram</td></tr>
-<tr><th scope="row">CPU</th><td>$(ConvertTo-HtmlText $cpuStatus)</td><td>$cpu</td></tr>
-<tr><th scope="row">Disco: $(ConvertTo-HtmlText $report.collectors.disk.systemVolume)</th><td>$(ConvertTo-HtmlText $diskStatus)</td><td>$disk</td></tr>
+<tr><th scope="row">RAM</th><td>$(ConvertTo-HtmlText $ramStatus)</td><td class="value">$ram<br><small>Disponible $(if ($null -ne $ramAvailableGiB) { $ramAvailableGiB } else { 'dato ausente' }) GiB de $(if ($null -ne $ramTotalGiB) { $ramTotalGiB } else { 'dato ausente' }) GiB</small></td></tr>
+<tr><th scope="row">CPU</th><td>$(ConvertTo-HtmlText $cpuStatus)</td><td class="value">$cpu</td></tr>
+<tr><th scope="row">Disco: $(ConvertTo-HtmlText $report.collectors.disk.systemVolume)</th><td>$(ConvertTo-HtmlText $diskStatus)</td><td class="value">$disk<br><small>Libre $(if ($null -ne $diskFreeGiB) { $diskFreeGiB } else { 'dato ausente' }) GiB de $(if ($null -ne $diskTotalGiB) { $diskTotalGiB } else { 'dato ausente' }) GiB</small></td></tr>
 </tbody>
 </table>
 <h2>Limpieza</h2>
-<p>Activada: $(if ([bool]$report.cleanup.enabled) {'sí'} else {'no'}) · Estado: $(ConvertTo-HtmlText $report.cleanup.mode).</p>
+<div class="cleanup">
+<p>Activada: <strong>$(if ([bool]$report.cleanup.enabled) {'sí'} else {'no'})</strong> - Estado: $(ConvertTo-HtmlText $report.cleanup.mode).</p>
 <p>Elegibles: $(ConvertTo-HtmlText $report.cleanup.eligible); eliminados: $(ConvertTo-HtmlText $report.cleanup.deleted); omitidos: $(ConvertTo-HtmlText $report.cleanup.omitted); fallidos: $(ConvertTo-HtmlText $report.cleanup.failed).</p>
+</div>
 <h2>Diagnóstico</h2>
+<div class="diagnostics">
 <ul>
 $(@($report.diagnosticIds | ForEach-Object { '<li>' + (ConvertTo-HtmlText $_) + '</li>' }) -join "`n")
 </ul>
+</div>
 </main>
 </body>
 </html>

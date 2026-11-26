@@ -244,9 +244,12 @@ function Get-EligibleTempFiles {
     param(
         [Parameter(Mandatory = $true)][string]$RootPath,
         [Parameter(Mandatory = $true)][string]$AuthorizedRoot,
-        [Parameter(Mandatory = $true)][int]$AgeDays
+        [Parameter(Mandatory = $true)][int]$AgeDays,
+        [int]$InspectedLimit = 500,
+        [int]$BudgetSeconds = 10
     )
     if ($AgeDays -lt 1) { throw 'La antigüedad mínima debe ser al menos un día.' }
+    if ($InspectedLimit -lt 1 -or $BudgetSeconds -lt 1) { throw 'Los límites de inspección deben ser positivos.' }
     $root = [IO.Path]::GetFullPath($RootPath)
     $authorized = [IO.Path]::GetFullPath($AuthorizedRoot)
     if (-not $root.Equals($authorized, [StringComparison]::OrdinalIgnoreCase)) {
@@ -266,7 +269,15 @@ function Get-EligibleTempFiles {
     $eligible = New-Object 'System.Collections.Generic.List[object]'
     $skipped = 0
     $errors = New-Object 'System.Collections.Generic.List[string]'
+    $inspected = 0
+    $budgetReached = $false
+    $budgetWatch = [Diagnostics.Stopwatch]::StartNew()
     while ($stack.Count -gt 0) {
+        if ($budgetReached) { break }
+        if ($inspected -ge $InspectedLimit -or $budgetWatch.Elapsed.TotalSeconds -ge $BudgetSeconds) {
+            $budgetReached = $true
+            break
+        }
         $directory = $stack.Pop()
         try {
             $entries = [IO.Directory]::GetFileSystemEntries($directory)
@@ -276,6 +287,11 @@ function Get-EligibleTempFiles {
             continue
         }
         foreach ($entry in $entries) {
+            $inspected++
+            if ($inspected -gt $InspectedLimit -or $budgetWatch.Elapsed.TotalSeconds -ge $BudgetSeconds) {
+                $budgetReached = $true
+                break
+            }
             try {
                 if (-not (Test-PathWithinRoot -Path $entry -Root $root)) {
                     $skipped++
@@ -323,6 +339,8 @@ function Get-EligibleTempFiles {
         Bytes = [long](($eligible | Measure-Object -Property Length -Sum).Sum)
         Skipped = $skipped
         Errors = @($errors.ToArray())
+        Inspected = $inspected
+        BudgetReached = $budgetReached
     }
 }
 
@@ -331,9 +349,13 @@ function Invoke-SafeTempCleanup {
         [Parameter(Mandatory = $true)][ValidateSet('Simulate', 'Clean')][string]$CleanupMode,
         [Parameter(Mandatory = $true)][string]$RootPath,
         [Parameter(Mandatory = $true)][string]$AuthorizedRoot,
-        [Parameter(Mandatory = $true)][int]$AgeDays
+        [Parameter(Mandatory = $true)][int]$AgeDays,
+        [int]$InspectedLimit = 500,
+        [int]$DeletedLimit = 100,
+        [long]$SizeLimitBytes = 268435456,
+        [int]$BudgetSeconds = 10
     )
-    $scan = Get-EligibleTempFiles -RootPath $RootPath -AuthorizedRoot $AuthorizedRoot -AgeDays $AgeDays
+    $scan = Get-EligibleTempFiles -RootPath $RootPath -AuthorizedRoot $AuthorizedRoot -AgeDays $AgeDays -InspectedLimit $InspectedLimit -BudgetSeconds $BudgetSeconds
     $deleted = 0
     $deletedBytes = [long]0
     $skipped = $scan.Skipped
@@ -343,6 +365,8 @@ function Invoke-SafeTempCleanup {
     if ($CleanupMode -eq 'Clean') {
         foreach ($file in $scan.Files) {
             try {
+                if ($deleted -ge $DeletedLimit) { throw "Límite de eliminaciones alcanzado: $DeletedLimit." }
+                if ($deletedBytes + $file.Length -gt $SizeLimitBytes) { throw "Límite lógico de tamaño alcanzado: $SizeLimitBytes bytes." }
                 if (-not (Test-PathWithinRoot -Path $file.Path -Root $AuthorizedRoot)) {
                     throw "Ruta fuera de la carpeta autorizada: $($file.Path)"
                 }
@@ -376,6 +400,8 @@ function Invoke-SafeTempCleanup {
         DeletedBytes = $deletedBytes
         Skipped = $skipped
         Errors = @($errors.ToArray())
+        Inspected = $scan.Inspected
+        BudgetReached = $scan.BudgetReached
     }
 }
 
@@ -566,7 +592,7 @@ function Invoke-Monitor {
                         DeletedBytes = [long]0; Skipped = 0; Errors = @('CLEANUP_NOT_ENABLED')
                     }
                 } elseif ($IsAutomatic) {
-                    $preview = Invoke-SafeTempCleanup -CleanupMode Simulate -RootPath $cleanupRoot -AuthorizedRoot $cleanupRoot -AgeDays ([int]$config.CleanupAgeDays)
+                    $preview = Invoke-SafeTempCleanup -CleanupMode Simulate -RootPath $cleanupRoot -AuthorizedRoot $cleanupRoot -AgeDays ([int]$config.CleanupAgeDays) -InspectedLimit ([int]$config.CleanupInspectedLimit) -DeletedLimit ([int]$config.CleanupDeletedLimit) -SizeLimitBytes ([long]$config.CleanupSizeLimitBytes) -BudgetSeconds ([int]$config.CleanupBudgetSeconds)
                     $statePath = Join-Path $outputDir 'state.json'
                     $state = if (Test-Path -LiteralPath $statePath) { Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json } else { [pscustomobject]@{ LastAutomaticCleanupDate = '' } }
                     $today = (Get-Date).ToString('yyyy-MM-dd')
@@ -575,7 +601,7 @@ function Invoke-Monitor {
                     if ($preview.Eligible -gt 0 -and ($diskLow -or $tempLarge) -and $state.LastAutomaticCleanupDate -ne $today) {
                         $state.LastAutomaticCleanupDate = $today
                         $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
-                        $cleanup = Invoke-SafeTempCleanup -CleanupMode Clean -RootPath $cleanupRoot -AuthorizedRoot $cleanupRoot -AgeDays ([int]$config.CleanupAgeDays)
+                        $cleanup = Invoke-SafeTempCleanup -CleanupMode Clean -RootPath $cleanupRoot -AuthorizedRoot $cleanupRoot -AgeDays ([int]$config.CleanupAgeDays) -InspectedLimit ([int]$config.CleanupInspectedLimit) -DeletedLimit ([int]$config.CleanupDeletedLimit) -SizeLimitBytes ([long]$config.CleanupSizeLimitBytes) -BudgetSeconds ([int]$config.CleanupBudgetSeconds)
                         $cleanupMessage = "Limpieza automática: $($cleanup.Deleted) archivo(s), $($cleanup.Skipped) omitido(s); espacio recuperado estimado $([math]::Round($cleanup.DeletedBytes / 1MB, 2)) MB."
                     } else {
                         $cleanupMessage = "Limpieza automática no activada; elegibles: $($preview.Eligible) archivo(s), $([math]::Round($preview.EligibleBytes / 1MB, 2)) MB. Umbral diario: $([math]::Round([long]$config.CleanupTempBytesThreshold / 1GB, 2)) GB o disco libre <= $($config.LowDiskFreePercent)%."
@@ -583,7 +609,7 @@ function Invoke-Monitor {
                     }
                 } else {
                     $effectiveCleanupMode = if ($WhatIfPreference -and $RunMode -eq 'Clean') { 'Simulate' } else { $RunMode }
-                    $cleanup = Invoke-SafeTempCleanup -CleanupMode $effectiveCleanupMode -RootPath $cleanupRoot -AuthorizedRoot $cleanupRoot -AgeDays ([int]$config.CleanupAgeDays)
+                    $cleanup = Invoke-SafeTempCleanup -CleanupMode $effectiveCleanupMode -RootPath $cleanupRoot -AuthorizedRoot $cleanupRoot -AgeDays ([int]$config.CleanupAgeDays) -InspectedLimit ([int]$config.CleanupInspectedLimit) -DeletedLimit ([int]$config.CleanupDeletedLimit) -SizeLimitBytes ([long]$config.CleanupSizeLimitBytes) -BudgetSeconds ([int]$config.CleanupBudgetSeconds)
                     if ($RunMode -eq 'Simulate') {
                         $cleanupMessage = "Simulación: elegibles $($cleanup.Eligible), tamaño total $([math]::Round($cleanup.EligibleBytes / 1MB, 2)) MB; borrados 0, omitidos $($cleanup.Skipped)."
                     } else {
