@@ -2,6 +2,8 @@
 
 PowerShell 5.1 compatible. La ejecución manual predeterminada es solo de informe; el resultado legible se guarda en `reports\latest-report.md` y el historial JSONL rotado en `reports\history.jsonl`.
 
+También se generan `reports/latest-report.json` (estado y métricas con unidades) y `reports/latest-report.html` (visor local autónomo, sin servidor y sin recursos externos). `latest-report.html` usa una CSP restrictiva y no ejecuta JavaScript.
+
 ## Uso
 
 ```powershell
@@ -27,3 +29,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-MemoryMonitorT
 ```
 
 La tarea requiere que el usuario haya iniciado sesión; se ejecuta aunque VS Code esté cerrado. `StartWhenAvailable` permite recuperar ejecuciones perdidas al volver a estar disponible el equipo. Las notificaciones de Windows están desactivadas por defecto; al activarlas, solo se intentan para alertas persistentes de RAM o disco.
+
+## Límites P0 de limpieza
+
+Por defecto ninguna ejecución limpia archivos. `-Mode Clean` requiere además `-CleanupEnabled` o `CleanupEnabled=true` en `MemoryMonitor.config.json`. Una ejecución automática sólo escribe en el directorio dedicado `<LOCALAPPDATA>\WindowsMemoryMonitor`, configurable como nombre simple. La limpieza general de `%TEMP%` queda fuera de la automatización horaria y sólo puede inspeccionarse con herramientas o pruebas locales.
+
+Los límites iniciales son: 7 días, 500 elementos inspeccionados, 100 eliminaciones, 256 MiB de tamaño lógico acumulado y 10 segundos de presupuesto objetivo. `-WhatIf` genera la vista previa sin borrar. Toda operación revalida el candidato y los ancestros literales. Hay una ventana de carrera si otro proceso sustituye una ruta después de la comprobación; por eso una tarea sobre temporales modificables por terceros debe seguir simulada hasta disponer de una API atómica adecuada.

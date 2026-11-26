@@ -1,7 +1,9 @@
-﻿param(
+[CmdletBinding(SupportsShouldProcess = $true)]
+param(
     [ValidateSet('Report', 'Simulate', 'Clean')]
     [string]$Mode = 'Report',
-    [switch]$Automatic
+    [switch]$Automatic,
+    [switch]$CleanupEnabled
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,12 +14,87 @@ function Get-MonitorConfig {
     if (-not (Test-Path -LiteralPath $script:ConfigPath -PathType Leaf)) {
         throw "No se encuentra la configuración: $script:ConfigPath"
     }
-    Get-Content -LiteralPath $script:ConfigPath -Raw | ConvertFrom-Json
+    $config = Get-Content -LiteralPath $script:ConfigPath -Raw | ConvertFrom-Json
+    if ($null -eq $config.PSObject.Properties['CleanupEnabled']) {
+        $config | Add-Member -NotePropertyName CleanupEnabled -NotePropertyValue $false
+    }
+    if ($null -eq $config.PSObject.Properties['CleanupRootName']) {
+        $config | Add-Member -NotePropertyName CleanupRootName -NotePropertyValue 'WindowsMemoryMonitor'
+    }
+    if ($null -eq $config.PSObject.Properties['StaleAfterMinutes']) {
+        $config | Add-Member -NotePropertyName StaleAfterMinutes -NotePropertyValue 150
+    }
+    $defaults = @{
+        CleanupInspectedLimit = 500
+        CleanupDeletedLimit = 100
+        CleanupSizeLimitBytes = 268435456
+        CleanupBudgetSeconds = 10
+    }
+    foreach ($key in $defaults.Keys) {
+        if ($null -eq $config.PSObject.Properties[$key]) {
+            $config | Add-Member -NotePropertyName $key -NotePropertyValue $defaults[$key]
+        }
+    }
+    $config
 }
 
 function ConvertTo-Gigabytes {
     param([double]$Bytes)
     [math]::Round($Bytes / 1GB, 2)
+}
+
+function Convert-RamMeasurement {
+    param(
+        [Parameter(Mandatory = $true)][int64]$TotalVisibleKiB,
+        [Parameter(Mandatory = $true)][int64]$AvailableKiB
+    )
+    if ($TotalVisibleKiB -le 0) { throw 'Memoria RAM total no positiva.' }
+    if ($AvailableKiB -lt 0) { throw 'Memoria disponible negativa.' }
+    $total = [int64]($TotalVisibleKiB * 1024)
+    $available = [int64]($AvailableKiB * 1024)
+    if ($available -gt $total) { throw 'Memoria disponible supera el total.' }
+    $used = [int64]($total - $available)
+    [pscustomobject]@{
+        TotalBytes = $total
+        AvailableBytes = $available
+        UsedBytes = $used
+        UsedPct = [math]::Round((100.0 * [decimal]$used / [decimal]$total), 1)
+    }
+}
+
+function Write-AtomicUtf8File {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$Content
+    )
+    $parent = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+        New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop | Out-Null
+    }
+    $tempPath = Join-Path $parent ('.' + [IO.Path]::GetRandomFileName())
+    try {
+        [IO.File]::WriteAllLines($tempPath, $Content, (New-Object Text.UTF8Encoding($false)))
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            $backupPath = $tempPath + '.bak'
+            [IO.File]::Replace($tempPath, $Path, $backupPath)
+            if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
+                Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            [IO.File]::Move($tempPath, $Path)
+        }
+    } catch [IO.IOException] {
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            throw "No se pudo reemplazar el archivo existente '$Path': $($_.Exception.Message)"
+        }
+        [IO.File]::Move($tempPath, $Path)
+    } catch {
+        throw "No se pudo publicar '$Path': $($_.Exception.Message)"
+    } finally {
+        if (Test-Path -LiteralPath $tempPath -PathType Leaf) {
+            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Test-PathWithinRoot {
@@ -78,6 +155,77 @@ function Resolve-UserTempRoot {
         throw 'La ruta temporal coincide con la raíz de una unidad; se omite la limpieza.'
     }
     $resolvedTemp
+}
+
+function Resolve-DedicatedCleanupRoot {
+    param(
+        [Parameter(Mandatory = $true)][object]$Config,
+        [Parameter(Mandatory = $false)][string]$OverrideRoot
+    )
+    $rootName = [string]$Config.CleanupRootName
+    if ([string]::IsNullOrWhiteSpace($rootName) -or $rootName -match '[\\/:*?"<>|]' -or $rootName.Contains('..')) {
+        throw 'CleanupRootName no es un nombre de directorio válido.'
+    }
+    $localAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA')
+    if ([string]::IsNullOrWhiteSpace($localAppData)) {
+        throw 'LOCALAPPDATA está vacío; no se puede resolver el directorio dedicado.'
+    }
+    $resolvedLocalAppData = [IO.Path]::GetFullPath($localAppData)
+    $root = if ([string]::IsNullOrWhiteSpace($OverrideRoot)) {
+        [IO.Path]::GetFullPath((Join-Path $resolvedLocalAppData $rootName))
+    } else {
+        [IO.Path]::GetFullPath($OverrideRoot)
+    }
+    $expectedPrefix = $resolvedLocalAppData.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    if (-not $root.StartsWith($expectedPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetDirectoryName($root).Equals([IO.Path]::GetPathRoot($root), [StringComparison]::OrdinalIgnoreCase)) {
+        throw "El directorio dedicado no está dentro de LOCALAPPDATA: $root"
+    }
+    if ($root.TrimEnd('\', '/').Equals([IO.Path]::GetPathRoot($root).TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Se rechazó una raíz de volumen como directorio de limpieza.'
+    }
+    if ($root.StartsWith('\\', [StringComparison]::Ordinal) -or $root.StartsWith('//', [StringComparison]::Ordinal)) {
+        throw 'No se permiten rutas de red.'
+    }
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        New-Item -ItemType Directory -Path $root -Force -ErrorAction Stop | Out-Null
+    }
+    $item = Get-Item -LiteralPath $root -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'El directorio dedicado es un reparse point.'
+    }
+    $root
+}
+
+function Test-MonitorConfig {
+    param([Parameter(Mandatory = $true)][object]$Config)
+    $ranges = [ordered]@{
+        CpuSampleSeconds = @(1, 30)
+        CleanupAgeDays = @(1, 3650)
+        LowDiskFreePercent = @(0, 100)
+        RamAlertPercent = @(0, 100)
+        DiskAlertPercent = @(0, 100)
+        PersistentRuns = @(2, 168)
+        HistoryRetentionDays = @(1, 3650)
+        HistoryMaxBytes = @(1024, 1073741824)
+        HistoryRotations = @(1, 100)
+        CleanupInspectedLimit = @(1, 100000)
+        CleanupDeletedLimit = @(1, 10000)
+        CleanupSizeLimitBytes = @(1, 1099511627776)
+        CleanupBudgetSeconds = @(1, 300)
+        StaleAfterMinutes = @(1, 10080)
+    }
+    foreach ($key in $ranges.Keys) {
+        if ($null -eq $Config.PSObject.Properties[$key]) { throw "Falta '$key' en la configuración." }
+        $value = [long]$Config.$key
+        if ($value -lt $ranges[$key][0] -or $value -gt $ranges[$key][1]) {
+            throw "Valor fuera de rango para '$key': $value."
+        }
+    }
+    if ($null -eq $Config.PSObject.Properties['CleanupEnabled'] -or
+        $Config.CleanupEnabled -isnot [bool]) {
+        throw 'CleanupEnabled debe ser booleano.'
+    }
 }
 
 function Test-ProtectedTempPath {
@@ -241,12 +389,11 @@ function Get-SystemMetrics {
 
     try {
         $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
-        $total = [double]$os.TotalVisibleMemorySize * 1KB
-        $available = [double]$os.FreePhysicalMemory * 1KB
-        $metrics.RamTotalBytes = $total
-        $metrics.RamAvailableBytes = $available
-        $metrics.RamUsedBytes = [math]::Max([double]0, [double]($total - $available))
-        if ($total -gt 0) { $metrics.RamUsedPercent = [math]::Round(100 * $metrics.RamUsedBytes / $total, 1) }
+        $ram = Convert-RamMeasurement -TotalVisibleKiB ([int64]$os.TotalVisibleMemorySize) -AvailableKiB ([int64]$os.FreePhysicalMemory)
+        $metrics.RamTotalBytes = $ram.TotalBytes
+        $metrics.RamAvailableBytes = $ram.AvailableBytes
+        $metrics.RamUsedBytes = $ram.UsedBytes
+        $metrics.RamUsedPercent = $ram.UsedPct
     } catch { $metrics.Errors.Add("RAM: $($_.Exception.Message)") }
 
     try {
@@ -304,7 +451,7 @@ function Get-SystemMetrics {
             } catch {}
         } | Where-Object { $null -ne $_ })
     } catch { $metrics.Errors.Add("Procesos/RAM residente: $($_.Exception.Message)") }
-    $metrics | Add-Member -NotePropertyName TopMemoryProcesses -NotePropertyValue @($processes | Sort-Object Bytes -Descending | Select-Object -First 5)
+    $metrics | Add-Member -NotePropertyName TopMemoryProcesses -NotePropertyValue @($processes | Sort-Object @{Expression='Bytes';Descending=$true}, @{Expression='Name';Descending=$false}, @{Expression='Id';Descending=$false} | Select-Object -First 5)
     $metrics | Add-Member -NotePropertyName GroupedMemoryProcesses -NotePropertyValue @(
         $processes | Group-Object Name | ForEach-Object {
             [pscustomobject]@{ Name = $_.Name; Instances = $_.Count; Bytes = [long](($_.Group | Measure-Object Bytes -Sum).Sum) }
@@ -372,6 +519,8 @@ function Send-PersistentAlertToast {
 function Invoke-Monitor {
     param([string]$RunMode, [bool]$IsAutomatic)
     $config = Get-MonitorConfig
+    Test-MonitorConfig -Config $config
+    $cleanupEnabled = [bool]$config.CleanupEnabled
     $outputDir = Join-Path $script:ProjectRoot 'reports'
     if (-not (Test-Path -LiteralPath $outputDir -PathType Container)) {
         New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
@@ -408,9 +557,16 @@ function Invoke-Monitor {
         $cleanupMessage = 'No ejecutada (modo solo informe).'
         if ($RunMode -ne 'Report') {
             try {
-                $tempRoot = Resolve-UserTempRoot
-                if ($IsAutomatic) {
-                    $preview = Invoke-SafeTempCleanup -CleanupMode Simulate -RootPath $tempRoot -AuthorizedRoot $tempRoot -AgeDays ([int]$config.CleanupAgeDays)
+                $cleanupEnabled = [bool]$config.CleanupEnabled -or [bool]$CleanupEnabled
+                $cleanupRoot = Resolve-DedicatedCleanupRoot -Config $config
+                if (-not $cleanupEnabled) {
+                    $cleanupMessage = 'Limpieza bloqueada: require activación explícita. Solo se conserva el informe.'
+                    $cleanup = [pscustomobject]@{
+                        Mode = 'Blocked'; Eligible = 0; EligibleBytes = [long]0; Deleted = 0
+                        DeletedBytes = [long]0; Skipped = 0; Errors = @('CLEANUP_NOT_ENABLED')
+                    }
+                } elseif ($IsAutomatic) {
+                    $preview = Invoke-SafeTempCleanup -CleanupMode Simulate -RootPath $cleanupRoot -AuthorizedRoot $cleanupRoot -AgeDays ([int]$config.CleanupAgeDays)
                     $statePath = Join-Path $outputDir 'state.json'
                     $state = if (Test-Path -LiteralPath $statePath) { Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json } else { [pscustomobject]@{ LastAutomaticCleanupDate = '' } }
                     $today = (Get-Date).ToString('yyyy-MM-dd')
@@ -419,14 +575,15 @@ function Invoke-Monitor {
                     if ($preview.Eligible -gt 0 -and ($diskLow -or $tempLarge) -and $state.LastAutomaticCleanupDate -ne $today) {
                         $state.LastAutomaticCleanupDate = $today
                         $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
-                        $cleanup = Invoke-SafeTempCleanup -CleanupMode Clean -RootPath $tempRoot -AuthorizedRoot $tempRoot -AgeDays ([int]$config.CleanupAgeDays)
+                        $cleanup = Invoke-SafeTempCleanup -CleanupMode Clean -RootPath $cleanupRoot -AuthorizedRoot $cleanupRoot -AgeDays ([int]$config.CleanupAgeDays)
                         $cleanupMessage = "Limpieza automática: $($cleanup.Deleted) archivo(s), $($cleanup.Skipped) omitido(s); espacio recuperado estimado $([math]::Round($cleanup.DeletedBytes / 1MB, 2)) MB."
                     } else {
                         $cleanupMessage = "Limpieza automática no activada; elegibles: $($preview.Eligible) archivo(s), $([math]::Round($preview.EligibleBytes / 1MB, 2)) MB. Umbral diario: $([math]::Round([long]$config.CleanupTempBytesThreshold / 1GB, 2)) GB o disco libre <= $($config.LowDiskFreePercent)%."
                         if ($state.LastAutomaticCleanupDate -eq $today) { $cleanupMessage += ' Ya se intentó hoy.' }
                     }
                 } else {
-                    $cleanup = Invoke-SafeTempCleanup -CleanupMode $RunMode -RootPath $tempRoot -AuthorizedRoot $tempRoot -AgeDays ([int]$config.CleanupAgeDays)
+                    $effectiveCleanupMode = if ($WhatIfPreference -and $RunMode -eq 'Clean') { 'Simulate' } else { $RunMode }
+                    $cleanup = Invoke-SafeTempCleanup -CleanupMode $effectiveCleanupMode -RootPath $cleanupRoot -AuthorizedRoot $cleanupRoot -AgeDays ([int]$config.CleanupAgeDays)
                     if ($RunMode -eq 'Simulate') {
                         $cleanupMessage = "Simulación: elegibles $($cleanup.Eligible), tamaño total $([math]::Round($cleanup.EligibleBytes / 1MB, 2)) MB; borrados 0, omitidos $($cleanup.Skipped)."
                     } else {
@@ -457,6 +614,8 @@ function Invoke-Monitor {
         if ($recommendations.Count -eq 0) { $recommendations.Add('No hay métricas suficientes para recomendaciones específicas; consulta los errores indicados.') }
 
         $record = [pscustomobject]@{
+            schemaVersion = 1
+            TimestampUtc = $started.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
             Timestamp = $started.ToString('o')
             RamUsedPercent = $metrics.RamUsedPercent
             DiskFreePercent = $metrics.DiskFreePercent
@@ -549,7 +708,45 @@ function Invoke-Monitor {
             $lines.Insert($trendIndex + 1, '- No hay ejecuciones anteriores disponibles para comparar.')
             $lines.Insert($trendIndex + 2, '')
         }
-        $lines | Set-Content -LiteralPath $reportPath -Encoding UTF8
+        Write-AtomicUtf8File -Path $reportPath -Content $lines.ToArray()
+
+        $jsonPath = Join-Path $outputDir 'latest-report.json'
+        $jsonRecord = [pscustomobject]@{
+            schemaVersion = 1
+            monitorVersion = '4f39414'
+            timestampUtc = $record.TimestampUtc
+            durationSeconds = [math]::Round((Get-Date).Subtract($started).TotalSeconds, 3)
+            status = if ($metrics.Errors.Count -eq 0) { 'ok' } elseif (
+                $null -ne $metrics.RamUsedPercent -or $null -ne $metrics.CpuPercent -or $null -ne $metrics.DiskFreeBytes
+            ) { 'partial' } else { 'failed' }
+            collectors = [pscustomobject]@{
+                ram = [pscustomobject]@{ status = if ($null -ne $metrics.RamUsedPercent) { 'ok' } else { 'failed' }; totalBytes = $metrics.RamTotalBytes; availableBytes = $metrics.RamAvailableBytes; usedBytes = $metrics.RamUsedBytes; usedPct = $metrics.RamUsedPercent }
+                cpu = [pscustomobject]@{ status = if ($null -ne $metrics.CpuPercent) { 'ok' } else { 'failed' }; usedPct = $metrics.CpuPercent; sampleSeconds = [int]$config.CpuSampleSeconds }
+                disk = [pscustomobject]@{ status = if ($null -ne $metrics.DiskFreeBytes) { 'ok' } else { 'failed' }; systemVolume = 'System'; totalBytes = $metrics.DiskTotalBytes; freeBytes = $metrics.DiskFreeBytes; freePct = $metrics.DiskFreePercent }
+            }
+            cleanup = [pscustomobject]@{
+                enabled = [bool]$cleanupEnabled
+                mode = if ($cleanup) { [string]$cleanup.Mode } else { [string]$RunMode }
+                inspected = if ($cleanup -and $cleanup.PSObject.Properties['Eligible']) { $cleanup.Eligible } else { $null }
+                eligible = if ($cleanup) { $cleanup.Eligible } else { $null }
+                omitted = if ($cleanup) { $cleanup.Skipped } else { $null }
+                deleted = if ($cleanup) { $cleanup.Deleted } else { 0 }
+                failed = if ($cleanup -and $cleanup.Errors.Count -gt 0) { $cleanup.Errors.Count } else { 0 }
+            }
+            alerts = [pscustomobject]@{ ram = [bool]$ramPersistent; disk = [bool]$diskPersistent }
+            diagnosticIds = @($metrics.Errors)
+            stale = $false
+        }
+        $jsonText = $jsonRecord | ConvertTo-Json -Depth 8
+        Write-AtomicUtf8File -Path $jsonPath -Content @($jsonText)
+        $htmlScript = Join-Path $script:ProjectRoot 'Generate-ReportHtml.ps1'
+        if (Test-Path -LiteralPath $htmlScript -PathType Leaf) {
+            try {
+                & $htmlScript -InputJson $jsonPath -OutputHtml (Join-Path $outputDir 'latest-report.html') -StaleAfterMinutes ([int]$config.StaleAfterMinutes) -ErrorAction Stop | Out-Null
+            } catch {
+                $metrics.Errors.Add("Informe HTML: $($_.Exception.Message)")
+            }
+        }
 
         if ([bool]$config.EnableWindowsNotifications -and ($ramPersistent -or $diskPersistent)) {
             $alertText = @()

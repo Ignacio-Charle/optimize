@@ -1,0 +1,38 @@
+name: Windows tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Parse scripts
+        shell: powershell
+        run: |
+          $failed = $false
+          foreach ($file in @('MemoryMonitor.ps1','Generate-ReportHtml.ps1','Install-MemoryMonitorTask.ps1','Disable-AutomaticCleanup.ps1','tests/Cleanup.Tests.ps1','tests/MemoryMonitor.Tests.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { $failed = $true; $errors | ForEach-Object { Write-Error $_.Message } }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Run Pester
+        shell: powershell
+        run: |
+          Invoke-Pester -Script @(
+            '.\tests\MemoryMonitor.Tests.ps1',
+            '.\tests\Cleanup.Tests.ps1'
+          ) -EnableExit

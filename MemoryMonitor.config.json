@@ -9,5 +9,12 @@
   "EnableWindowsNotifications": false,
   "HistoryRetentionDays": 30,
   "HistoryMaxBytes": 5242880,
-  "HistoryRotations": 3
+  "HistoryRotations": 3,
+  "CleanupEnabled": false,
+  "CleanupRootName": "WindowsMemoryMonitor",
+  "CleanupInspectedLimit": 500,
+  "CleanupDeletedLimit": 100,
+  "CleanupSizeLimitBytes": 268435456,
+  "CleanupBudgetSeconds": 10,
+  "StaleAfterMinutes": 150
 }
