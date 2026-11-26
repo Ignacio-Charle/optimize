@@ -1,0 +1,13 @@
+{
+  "CpuSampleSeconds": 2,
+  "CleanupAgeDays": 7,
+  "LowDiskFreePercent": 10,
+  "CleanupTempBytesThreshold": 1073741824,
+  "RamAlertPercent": 90,
+  "DiskAlertPercent": 10,
+  "PersistentRuns": 3,
+  "EnableWindowsNotifications": false,
+  "HistoryRetentionDays": 30,
+  "HistoryMaxBytes": 5242880,
+  "HistoryRotations": 3
+}
