@@ -1,6 +1,6 @@
-# Informe de memoria del PC
+# Monitor de recursos de Windows
 
-[![Windows tests](https://github.com/Ignacio-Charle/windows-memory-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/Ignacio-Charle/windows-memory-monitor/actions/workflows/ci.yml)
+[![Windows tests](https://github.com/Ignacio-Charle/windows-resource-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/Ignacio-Charle/windows-resource-monitor/actions/workflows/ci.yml)
 
 Diagnóstico local de Windows 11 para RAM, CPU y disco, con historial y limpieza opt-in. PowerShell 5.1 compatible.
 

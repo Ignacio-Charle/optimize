@@ -534,7 +534,7 @@ function Send-PersistentAlertToast {
         Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
         $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
         $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-        $xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>Informe de memoria del PC</text><text>$([Security.SecurityElement]::Escape($Message))</text></binding></visual></toast>")
+        $xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>Monitor de recursos de Windows</text><text>$([Security.SecurityElement]::Escape($Message))</text></binding></visual></toast>")
         $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Windows PowerShell').Show($toast)
     } catch {
@@ -659,7 +659,7 @@ function Invoke-Monitor {
         Write-HistoryRecord -Path $historyPath -Record $record -Config $config
 
         $lines = New-Object 'System.Collections.Generic.List[string]'
-        $lines.Add('# Informe de memoria del PC')
+        $lines.Add('# Monitor de recursos de Windows')
         $lines.Add('')
         $lines.Add("Fecha y hora local: $($started.ToString('yyyy-MM-dd HH:mm:ss zzz'))")
         $lines.Add('')

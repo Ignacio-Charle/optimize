@@ -73,7 +73,7 @@ $html = @"
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
-<title>Informe de memoria del PC</title>
+<title>Monitor de recursos de Windows</title>
 <style>
 :root {
   color-scheme: light dark;
@@ -144,7 +144,7 @@ h2 { margin: 2rem 0 0.65rem; font-size: 1.15rem; }
 </head>
 <body>
 <main>
-<h1 tabindex="-1">Informe de memoria del PC</h1>
+<h1 tabindex="-1">Monitor de recursos de Windows</h1>
 <p class="meta"><time datetime="$(ConvertTo-HtmlText $report.timestampUtc)">$(ConvertTo-HtmlText $localTimeText)</time> (hora local) - <time datetime="$(ConvertTo-HtmlText $report.timestampUtc)">$(ConvertTo-HtmlText $report.timestampUtc)</time> UTC</p>
 <p class="status $(ConvertTo-HtmlText $statusText)"><span class="label">$(ConvertTo-HtmlText $statusText)</span> Datos: <strong>$staleText</strong></p>
 <table class="resource-table">
