@@ -12,7 +12,7 @@ $script:ConfigPath = Join-Path $script:ProjectRoot 'MemoryMonitor.config.json'
 
 function Get-MonitorConfig {
     if (-not (Test-Path -LiteralPath $script:ConfigPath -PathType Leaf)) {
-        throw "No se encuentra la configuración: $script:ConfigPath"
+        throw "Configuration file not found: $script:ConfigPath"
     }
     $config = Get-Content -LiteralPath $script:ConfigPath -Raw | ConvertFrom-Json
     if ($null -eq $config.PSObject.Properties['CleanupEnabled']) {
@@ -48,11 +48,11 @@ function Convert-RamMeasurement {
         [Parameter(Mandatory = $true)][int64]$TotalVisibleKiB,
         [Parameter(Mandatory = $true)][int64]$AvailableKiB
     )
-    if ($TotalVisibleKiB -le 0) { throw 'Memoria RAM total no positiva.' }
-    if ($AvailableKiB -lt 0) { throw 'Memoria disponible negativa.' }
+    if ($TotalVisibleKiB -le 0) { throw 'Total RAM must be positive.' }
+    if ($AvailableKiB -lt 0) { throw 'Available memory cannot be negative.' }
     $total = [int64]($TotalVisibleKiB * 1024)
     $available = [int64]($AvailableKiB * 1024)
-    if ($available -gt $total) { throw 'Memoria disponible supera el total.' }
+    if ($available -gt $total) { throw 'Available memory cannot exceed total memory.' }
     $used = [int64]($total - $available)
     [pscustomobject]@{
         TotalBytes = $total
@@ -85,11 +85,11 @@ function Write-AtomicUtf8File {
         }
     } catch [IO.IOException] {
         if (Test-Path -LiteralPath $Path -PathType Leaf) {
-            throw "No se pudo reemplazar el archivo existente '$Path': $($_.Exception.Message)"
+            throw "Could not replace existing file '$Path': $($_.Exception.Message)"
         }
         [IO.File]::Move($tempPath, $Path)
     } catch {
-        throw "No se pudo publicar '$Path': $($_.Exception.Message)"
+        throw "Could not publish '$Path': $($_.Exception.Message)"
     } finally {
         if (Test-Path -LiteralPath $tempPath -PathType Leaf) {
             Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
@@ -130,29 +130,29 @@ function Resolve-UserTempRoot {
     $tempPath = [Environment]::GetEnvironmentVariable('TEMP')
     $localAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA')
     if ([string]::IsNullOrWhiteSpace($tempPath) -or [string]::IsNullOrWhiteSpace($localAppData)) {
-        throw 'TEMP o LOCALAPPDATA está vacío; no se puede validar la carpeta temporal del usuario.'
+        throw 'TEMP or LOCALAPPDATA is empty; the user temp directory cannot be validated.'
     }
 
     $resolvedTemp = [IO.Path]::GetFullPath($tempPath)
     $expectedTemp = [IO.Path]::GetFullPath((Join-Path $localAppData 'Temp'))
     $resolvedLocalAppData = [IO.Path]::GetFullPath($localAppData)
     if (-not $resolvedTemp.Equals($expectedTemp, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "TEMP apunta a una ruta inesperada ('$resolvedTemp'); se esperaba '$expectedTemp'."
+        throw "TEMP points to an unexpected path ('$resolvedTemp'); expected '$expectedTemp'."
     }
     if (-not (Split-Path -Parent $resolvedTemp).TrimEnd('\').Equals($resolvedLocalAppData.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'La carpeta temporal no es una hija directa de LOCALAPPDATA.'
+        throw 'The temp directory is not a direct child of LOCALAPPDATA.'
     }
     if (-not (Test-Path -LiteralPath $resolvedTemp -PathType Container)) {
-        throw "La carpeta temporal no existe o no es accesible: $resolvedTemp"
+        throw "The temp directory does not exist or is inaccessible: $resolvedTemp"
     }
 
     $rootItem = Get-Item -LiteralPath $resolvedTemp -Force
     if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw 'La carpeta temporal es un punto de reanálisis; se omite la limpieza.'
+        throw 'The temp directory is a reparse point; cleanup is skipped.'
     }
     $driveRoot = [IO.Path]::GetPathRoot($resolvedTemp)
     if ($resolvedTemp.TrimEnd('\').Equals($driveRoot.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'La ruta temporal coincide con la raíz de una unidad; se omite la limpieza.'
+        throw 'The temp path is a drive root; cleanup is skipped.'
     }
     $resolvedTemp
 }
@@ -164,11 +164,11 @@ function Resolve-DedicatedCleanupRoot {
     )
     $rootName = [string]$Config.CleanupRootName
     if ([string]::IsNullOrWhiteSpace($rootName) -or $rootName -match '[\\/:*?"<>|]' -or $rootName.Contains('..')) {
-        throw 'CleanupRootName no es un nombre de directorio válido.'
+        throw 'CleanupRootName is not a valid directory name.'
     }
     $localAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA')
     if ([string]::IsNullOrWhiteSpace($localAppData)) {
-        throw 'LOCALAPPDATA está vacío; no se puede resolver el directorio dedicado.'
+        throw 'LOCALAPPDATA is empty; the dedicated directory cannot be resolved.'
     }
     $resolvedLocalAppData = [IO.Path]::GetFullPath($localAppData)
     $root = if ([string]::IsNullOrWhiteSpace($OverrideRoot)) {
@@ -179,20 +179,20 @@ function Resolve-DedicatedCleanupRoot {
     $expectedPrefix = $resolvedLocalAppData.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
     if (-not $root.StartsWith($expectedPrefix, [StringComparison]::OrdinalIgnoreCase) -or
         [IO.Path]::GetDirectoryName($root).Equals([IO.Path]::GetPathRoot($root), [StringComparison]::OrdinalIgnoreCase)) {
-        throw "El directorio dedicado no está dentro de LOCALAPPDATA: $root"
+        throw "The dedicated directory is outside LOCALAPPDATA: $root"
     }
     if ($root.TrimEnd('\', '/').Equals([IO.Path]::GetPathRoot($root).TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Se rechazó una raíz de volumen como directorio de limpieza.'
+        throw 'A volume root cannot be used as the cleanup directory.'
     }
     if ($root.StartsWith('\\', [StringComparison]::Ordinal) -or $root.StartsWith('//', [StringComparison]::Ordinal)) {
-        throw 'No se permiten rutas de red.'
+        throw 'Network paths are not allowed.'
     }
     if (-not (Test-Path -LiteralPath $root -PathType Container)) {
         New-Item -ItemType Directory -Path $root -Force -ErrorAction Stop | Out-Null
     }
     $item = Get-Item -LiteralPath $root -Force
     if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw 'El directorio dedicado es un reparse point.'
+        throw 'The dedicated directory is a reparse point.'
     }
     $root
 }
@@ -216,15 +216,15 @@ function Test-MonitorConfig {
         StaleAfterMinutes = @(1, 10080)
     }
     foreach ($key in $ranges.Keys) {
-        if ($null -eq $Config.PSObject.Properties[$key]) { throw "Falta '$key' en la configuración." }
+        if ($null -eq $Config.PSObject.Properties[$key]) { throw "Missing configuration value '$key'." }
         $value = [long]$Config.$key
         if ($value -lt $ranges[$key][0] -or $value -gt $ranges[$key][1]) {
-            throw "Valor fuera de rango para '$key': $value."
+            throw "Configuration value '$key' is out of range: $value."
         }
     }
     if ($null -eq $Config.PSObject.Properties['CleanupEnabled'] -or
         $Config.CleanupEnabled -isnot [bool]) {
-        throw 'CleanupEnabled debe ser booleano.'
+        throw 'CleanupEnabled must be a Boolean.'
     }
 }
 
@@ -248,19 +248,19 @@ function Get-EligibleTempFiles {
         [int]$InspectedLimit = 500,
         [int]$BudgetSeconds = 10
     )
-    if ($AgeDays -lt 1) { throw 'La antigüedad mínima debe ser al menos un día.' }
-    if ($InspectedLimit -lt 1 -or $BudgetSeconds -lt 1) { throw 'Los límites de inspección deben ser positivos.' }
+    if ($AgeDays -lt 1) { throw 'The minimum file age must be at least one day.' }
+    if ($InspectedLimit -lt 1 -or $BudgetSeconds -lt 1) { throw 'Inspection limits must be positive.' }
     $root = [IO.Path]::GetFullPath($RootPath)
     $authorized = [IO.Path]::GetFullPath($AuthorizedRoot)
     if (-not $root.Equals($authorized, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Ruta rechazada: '$root' no coincide exactamente con la carpeta temporal autorizada '$authorized'."
+        throw "Path rejected: '$root' does not exactly match the authorized temp directory '$authorized'."
     }
     if (-not (Test-Path -LiteralPath $root -PathType Container)) {
-        throw "La carpeta autorizada no existe o no es accesible: $root"
+        throw "The authorized directory does not exist or is inaccessible: $root"
     }
     $rootInfo = Get-Item -LiteralPath $root -Force
     if (($rootInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw 'La carpeta autorizada es un punto de reanálisis.'
+        throw 'The authorized directory is a reparse point.'
     }
 
     $cutoff = (Get-Date).AddDays(-$AgeDays)
@@ -283,7 +283,7 @@ function Get-EligibleTempFiles {
             $entries = [IO.Directory]::GetFileSystemEntries($directory)
         } catch {
             $skipped++
-            $errors.Add("No se pudo enumerar '$directory': $($_.Exception.Message)")
+            $errors.Add("Could not enumerate '$directory': $($_.Exception.Message)")
             continue
         }
         foreach ($entry in $entries) {
@@ -295,7 +295,7 @@ function Get-EligibleTempFiles {
             try {
                 if (-not (Test-PathWithinRoot -Path $entry -Root $root)) {
                     $skipped++
-                    $errors.Add("Entrada fuera de la raíz, omitida: $entry")
+                    $errors.Add("Entry outside the root was skipped: $entry")
                     continue
                 }
                 $attributes = [IO.File]::GetAttributes($entry)
@@ -329,7 +329,7 @@ function Get-EligibleTempFiles {
                 }
             } catch {
                 $skipped++
-                $errors.Add("No se pudo comprobar '$entry': $($_.Exception.Message)")
+                $errors.Add("Could not inspect '$entry': $($_.Exception.Message)")
             }
         }
     }
@@ -365,29 +365,29 @@ function Invoke-SafeTempCleanup {
     if ($CleanupMode -eq 'Clean') {
         foreach ($file in $scan.Files) {
             try {
-                if ($deleted -ge $DeletedLimit) { throw "Límite de eliminaciones alcanzado: $DeletedLimit." }
-                if ($deletedBytes + $file.Length -gt $SizeLimitBytes) { throw "Límite lógico de tamaño alcanzado: $SizeLimitBytes bytes." }
+                if ($deleted -ge $DeletedLimit) { throw "Deletion limit reached: $DeletedLimit." }
+                if ($deletedBytes + $file.Length -gt $SizeLimitBytes) { throw "Logical size limit reached: $SizeLimitBytes bytes." }
                 if (-not (Test-PathWithinRoot -Path $file.Path -Root $AuthorizedRoot)) {
-                    throw "Ruta fuera de la carpeta autorizada: $($file.Path)"
+                    throw "Path is outside the authorized directory: $($file.Path)"
                 }
                 if (-not (Test-NoReparseAncestors -Path $file.Path -Root $AuthorizedRoot)) {
-                    throw 'El archivo está dentro de un punto de reanálisis o en una ruta que dejó de ser confiable.'
+                    throw 'The file is under a reparse point or an untrusted path.'
                 }
                 $attributes = [IO.File]::GetAttributes($file.Path)
                 if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
                     ($attributes -band [IO.FileAttributes]::Directory) -ne 0) {
-                    throw 'El elemento dejó de ser un archivo regular antes de borrarlo.'
+                    throw 'The item is no longer a regular file.'
                 }
                 $currentInfo = New-Object IO.FileInfo($file.Path)
                 if ($currentInfo.LastWriteTime -gt (Get-Date).AddDays(-$AgeDays)) {
-                    throw 'El archivo dejó de cumplir la antigüedad mínima.'
+                    throw 'The file no longer meets the minimum age.'
                 }
                 [IO.File]::Delete($file.Path)
                 $deleted++
                 $deletedBytes += $file.Length
             } catch {
                 $skipped++
-                $errors.Add("Se omitió '$($file.Path)': $($_.Exception.Message)")
+                $errors.Add("Skipped '$($file.Path)': $($_.Exception.Message)")
             }
         }
     }
@@ -463,7 +463,7 @@ function Get-SystemMetrics {
     try {
         $systemDrive = [IO.Path]::GetPathRoot($env:SystemDrive)
         $disk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter ("DeviceID='" + $systemDrive.TrimEnd('\') + "'") -ErrorAction Stop
-        if (-not $disk -or [double]$disk.Size -le 0) { throw 'No se obtuvo el tamaño de la unidad del sistema.' }
+        if (-not $disk -or [double]$disk.Size -le 0) { throw 'Could not retrieve the system volume size.' }
         $metrics.DiskTotalBytes = [double]$disk.Size
         $metrics.DiskFreeBytes = [double]$disk.FreeSpace
         $metrics.DiskFreePercent = [math]::Round(100 * $metrics.DiskFreeBytes / $metrics.DiskTotalBytes, 1)
@@ -495,7 +495,7 @@ function Get-RecentHistory {
         foreach ($line in Get-Content -LiteralPath $source.FullName -ErrorAction Stop) {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
             try { $items.Add(($line | ConvertFrom-Json -ErrorAction Stop)) }
-            catch { Write-Warning "Se ignoró una línea de historial no válida: $($_.Exception.Message)" }
+            catch { Write-Warning "Ignored an invalid history line: $($_.Exception.Message)" }
         }
     }
     @($items.ToArray() | Sort-Object Timestamp | Select-Object -Last $Count)
@@ -521,7 +521,7 @@ function Write-HistoryRecord {
 
 function Format-ProcessRows {
     param([object[]]$Processes, [string]$Kind)
-    if (-not $Processes -or $Processes.Count -eq 0) { return "_No disponible._" }
+    if (-not $Processes -or $Processes.Count -eq 0) { return "_Unavailable._" }
     if ($Kind -eq 'Memory') {
         return (@($Processes | ForEach-Object { '| {0} | {1} | {2:N2} GB |' -f $_.Name, $_.Id, ($_.Bytes / 1GB) }) -join "`n")
     }
@@ -538,7 +538,7 @@ function Send-PersistentAlertToast {
         $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Windows PowerShell').Show($toast)
     } catch {
-        Write-Warning "No se pudo mostrar la notificación de Windows: $($_.Exception.Message)"
+        Write-Warning "Could not display the Windows notification: $($_.Exception.Message)"
     }
 }
 
@@ -557,7 +557,7 @@ function Invoke-Monitor {
     try {
         $lock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     } catch {
-        Write-Output 'Ya hay una ejecución en curso; esta ejecución se omite.'
+        Write-Output 'Another run is already in progress; this run was skipped.'
         return
     }
 
@@ -580,13 +580,13 @@ function Invoke-Monitor {
         $diskPersistent = $diskAlert -and ($priorDiskAlerts + 1 -ge [int]$config.PersistentRuns)
 
         $cleanup = $null
-        $cleanupMessage = 'No ejecutada (modo solo informe).'
+        $cleanupMessage = 'Not run (report-only mode).'
         if ($RunMode -ne 'Report') {
             try {
                 $cleanupEnabled = [bool]$config.CleanupEnabled -or [bool]$CleanupEnabled
                 $cleanupRoot = Resolve-DedicatedCleanupRoot -Config $config
                 if (-not $cleanupEnabled) {
-                    $cleanupMessage = 'Limpieza bloqueada: require activación explícita. Solo se conserva el informe.'
+                    $cleanupMessage = 'Cleanup blocked: explicit opt-in is required. Only the report was generated.'
                     $cleanup = [pscustomobject]@{
                         Mode = 'Blocked'; Eligible = 0; EligibleBytes = [long]0; Deleted = 0
                         DeletedBytes = [long]0; Skipped = 0; Errors = @('CLEANUP_NOT_ENABLED')
@@ -602,22 +602,22 @@ function Invoke-Monitor {
                         $state.LastAutomaticCleanupDate = $today
                         $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
                         $cleanup = Invoke-SafeTempCleanup -CleanupMode Clean -RootPath $cleanupRoot -AuthorizedRoot $cleanupRoot -AgeDays ([int]$config.CleanupAgeDays) -InspectedLimit ([int]$config.CleanupInspectedLimit) -DeletedLimit ([int]$config.CleanupDeletedLimit) -SizeLimitBytes ([long]$config.CleanupSizeLimitBytes) -BudgetSeconds ([int]$config.CleanupBudgetSeconds)
-                        $cleanupMessage = "Limpieza automática: $($cleanup.Deleted) archivo(s), $($cleanup.Skipped) omitido(s); espacio recuperado estimado $([math]::Round($cleanup.DeletedBytes / 1MB, 2)) MB."
+                        $cleanupMessage = "Automatic cleanup: deleted $($cleanup.Deleted) file(s), skipped $($cleanup.Skipped); estimated logical size removed $([math]::Round($cleanup.DeletedBytes / 1MB, 2)) MB."
                     } else {
-                        $cleanupMessage = "Limpieza automática no activada; elegibles: $($preview.Eligible) archivo(s), $([math]::Round($preview.EligibleBytes / 1MB, 2)) MB. Umbral diario: $([math]::Round([long]$config.CleanupTempBytesThreshold / 1GB, 2)) GB o disco libre <= $($config.LowDiskFreePercent)%."
-                        if ($state.LastAutomaticCleanupDate -eq $today) { $cleanupMessage += ' Ya se intentó hoy.' }
+                        $cleanupMessage = "Automatic cleanup not triggered; eligible: $($preview.Eligible) file(s), $([math]::Round($preview.EligibleBytes / 1MB, 2)) MB. Daily threshold: $([math]::Round([long]$config.CleanupTempBytesThreshold / 1GB, 2)) GB or disk free <= $($config.LowDiskFreePercent)%."
+                        if ($state.LastAutomaticCleanupDate -eq $today) { $cleanupMessage += ' Cleanup was already attempted today.' }
                     }
                 } else {
                     $effectiveCleanupMode = if ($WhatIfPreference -and $RunMode -eq 'Clean') { 'Simulate' } else { $RunMode }
                     $cleanup = Invoke-SafeTempCleanup -CleanupMode $effectiveCleanupMode -RootPath $cleanupRoot -AuthorizedRoot $cleanupRoot -AgeDays ([int]$config.CleanupAgeDays) -InspectedLimit ([int]$config.CleanupInspectedLimit) -DeletedLimit ([int]$config.CleanupDeletedLimit) -SizeLimitBytes ([long]$config.CleanupSizeLimitBytes) -BudgetSeconds ([int]$config.CleanupBudgetSeconds)
                     if ($RunMode -eq 'Simulate') {
-                        $cleanupMessage = "Simulación: elegibles $($cleanup.Eligible), tamaño total $([math]::Round($cleanup.EligibleBytes / 1MB, 2)) MB; borrados 0, omitidos $($cleanup.Skipped)."
+                        $cleanupMessage = "Simulation: $($cleanup.Eligible) eligible file(s), total size $([math]::Round($cleanup.EligibleBytes / 1MB, 2)) MB; deleted 0, skipped $($cleanup.Skipped)."
                     } else {
-                        $cleanupMessage = "Limpieza real: elegibles $($cleanup.Eligible), borrados $($cleanup.Deleted), omitidos $($cleanup.Skipped); espacio recuperado estimado $([math]::Round($cleanup.DeletedBytes / 1MB, 2)) MB."
+                        $cleanupMessage = "Cleanup: $($cleanup.Eligible) eligible, $($cleanup.Deleted) deleted, $($cleanup.Skipped) skipped; estimated logical size removed $([math]::Round($cleanup.DeletedBytes / 1MB, 2)) MB."
                     }
                 }
             } catch {
-                $cleanupMessage = "Limpieza omitida: $($_.Exception.Message)"
+                $cleanupMessage = "Cleanup skipped: $($_.Exception.Message)"
                 if ($null -eq $cleanup) {
                     $cleanup = [pscustomobject]@{ Mode = $RunMode; Eligible = $null; EligibleBytes = $null; Deleted = 0; DeletedBytes = 0; Skipped = 0; Errors = @($_.Exception.Message) }
                 }
@@ -626,18 +626,18 @@ function Invoke-Monitor {
 
         $recommendations = New-Object 'System.Collections.Generic.List[string]'
         if ($null -ne $metrics.RamUsedPercent) {
-            if ($ramPersistent) { $recommendations.Add("RAM sobre $($config.RamAlertPercent)% en al menos $($config.PersistentRuns) ejecuciones: revisa las aplicaciones listadas y guarda el trabajo antes de cerrar cualquier programa.") }
-            elseif ($ramAlert) { $recommendations.Add("Uso de RAM alto en esta ejecución; comprueba si persiste en los próximos informes antes de actuar.") }
-            else { $recommendations.Add('El uso de RAM está por debajo del umbral configurado.') }
+            if ($ramPersistent) { $recommendations.Add("RAM exceeded $($config.RamAlertPercent)% for at least $($config.PersistentRuns) consecutive runs. Review the listed applications and save your work before closing anything.") }
+            elseif ($ramAlert) { $recommendations.Add('RAM usage is high in this sample; check whether it persists before taking action.') }
+            else { $recommendations.Add('RAM usage is below the configured threshold.') }
         }
         if ($null -ne $metrics.DiskFreePercent) {
-            if ($diskPersistent) { $recommendations.Add("Espacio libre por debajo de $($config.DiskAlertPercent)% en al menos $($config.PersistentRuns) ejecuciones: revisa archivos grandes y copias de seguridad; no borres archivos del sistema.") }
-            elseif ($diskAlert) { $recommendations.Add('Espacio libre bajo en esta ejecución; comprueba si la situación persiste.') }
-            else { $recommendations.Add('El espacio libre en disco está por encima del umbral configurado.') }
+            if ($diskPersistent) { $recommendations.Add("Free disk space was below $($config.DiskAlertPercent)% for at least $($config.PersistentRuns) consecutive runs. Review large files and backups; do not delete system files.") }
+            elseif ($diskAlert) { $recommendations.Add('Free disk space is low in this sample; check whether the condition persists.') }
+            else { $recommendations.Add('Free disk space is above the configured threshold.') }
         }
-        if ($null -ne $metrics.CpuPercent -and $metrics.CpuPercent -ge 80) { $recommendations.Add('La CPU está muy ocupada durante la muestra; consulta los procesos con mayor uso y vuelve a medir si la carga es transitoria.') }
-        if ($cleanup -and $cleanup.Eligible -gt 0) { $recommendations.Add("Hay $($cleanup.Eligible) temporales con antigüedad suficiente; la acción aplicada se limita a archivos dentro de la carpeta temporal validada del usuario.") }
-        if ($recommendations.Count -eq 0) { $recommendations.Add('No hay métricas suficientes para recomendaciones específicas; consulta los errores indicados.') }
+        if ($null -ne $metrics.CpuPercent -and $metrics.CpuPercent -ge 80) { $recommendations.Add('CPU utilization was high during the sample; review the listed processes and sample again to check whether the load is temporary.') }
+        if ($cleanup -and $cleanup.Eligible -gt 0) { $recommendations.Add("$($cleanup.Eligible) old temporary file(s) were found. Cleanup is confined to the validated dedicated directory.") }
+        if ($recommendations.Count -eq 0) { $recommendations.Add('There is not enough metric data for specific recommendations; review the reported errors.') }
 
         $record = [pscustomobject]@{
             schemaVersion = 1
@@ -661,77 +661,77 @@ function Invoke-Monitor {
         $lines = New-Object 'System.Collections.Generic.List[string]'
         $lines.Add('# Monitor de recursos de Windows')
         $lines.Add('')
-        $lines.Add("Fecha y hora local: $($started.ToString('yyyy-MM-dd HH:mm:ss zzz'))")
+        $lines.Add("Local date and time: $($started.ToString('yyyy-MM-dd HH:mm:ss zzz'))")
         $lines.Add('')
         $lines.Add('## RAM')
         if ($null -ne $metrics.RamTotalBytes) {
-            $lines.Add(('- Total: {0:N2} GB; disponible: {1:N2} GB; utilizada: {2:N2} GB ({3:N1}%).' -f (ConvertTo-Gigabytes $metrics.RamTotalBytes), (ConvertTo-Gigabytes $metrics.RamAvailableBytes), (ConvertTo-Gigabytes $metrics.RamUsedBytes), $metrics.RamUsedPercent))
+            $lines.Add(('- Total: {0:N2} GB; available: {1:N2} GB; used: {2:N2} GB ({3:N1}%).' -f (ConvertTo-Gigabytes $metrics.RamTotalBytes), (ConvertTo-Gigabytes $metrics.RamAvailableBytes), (ConvertTo-Gigabytes $metrics.RamUsedBytes), $metrics.RamUsedPercent))
             $lines.Add('')
-            $lines.Add('| Proceso | PID | Memoria residente |')
+            $lines.Add('| Process | PID | Resident memory |')
             $lines.Add('|---|---:|---:|')
             $lines.Add((Format-ProcessRows -Processes $metrics.TopMemoryProcesses -Kind Memory))
             $lines.Add('')
-            $lines.Add('### Aplicaciones agrupadas (mayor memoria total)')
+            $lines.Add('### Applications grouped by memory usage')
             foreach ($group in $metrics.GroupedMemoryProcesses) { $lines.Add(('- {0}: {1} instancia(s), {2:N2} GB.' -f $group.Name, $group.Instances, ($group.Bytes / 1GB))) }
-        } else { $lines.Add('- No disponible.') }
+        } else { $lines.Add('- Unavailable.') }
         $lines.Add('')
-        $lines.Add('## CPU y disco')
+        $lines.Add('## CPU and disk')
         if ($null -ne $metrics.CpuPercent) {
-            $lines.Add(('- CPU media durante {0} s: {1:N1}% del total de procesadores lógicos.' -f $config.CpuSampleSeconds, $metrics.CpuPercent))
+            $lines.Add(('- Average CPU over {0} s: {1:N1}% of total logical processor capacity.' -f $config.CpuSampleSeconds, $metrics.CpuPercent))
             $lines.Add('')
-            $lines.Add('| Proceso | PID | CPU durante la muestra |')
+            $lines.Add('| Process | PID | CPU during sample |')
             $lines.Add('|---|---:|---:|')
             $lines.Add((Format-ProcessRows -Processes $metrics.CpuTopProcesses -Kind CPU))
-        } else { $lines.Add('- CPU: no disponible.') }
+        } else { $lines.Add('- CPU: unavailable.') }
         if ($null -ne $metrics.DiskTotalBytes) {
-            $lines.Add(('- Unidad del sistema: {0:N2} GB libres de {1:N2} GB ({2:N1}% libre).' -f (ConvertTo-Gigabytes $metrics.DiskFreeBytes), (ConvertTo-Gigabytes $metrics.DiskTotalBytes), $metrics.DiskFreePercent))
-        } else { $lines.Add('- Disco: no disponible.') }
+            $lines.Add(('- System volume: {0:N2} GB free of {1:N2} GB ({2:N1}% free).' -f (ConvertTo-Gigabytes $metrics.DiskFreeBytes), (ConvertTo-Gigabytes $metrics.DiskTotalBytes), $metrics.DiskFreePercent))
+        } else { $lines.Add('- Disk: unavailable.') }
         $lines.Add('')
-        $lines.Add('## Limpieza')
+        $lines.Add('## Cleanup')
         $lines.Add($cleanupMessage)
         if ($cleanup -and $cleanup.Mode -eq 'Simulate') {
-            $lines.Add("Archivos elegibles: $($cleanup.Eligible); tamaño total: $([math]::Round($cleanup.EligibleBytes / 1MB, 2)) MB. Simulación: no se eliminó ningún archivo.")
+            $lines.Add("Eligible files: $($cleanup.Eligible); total size: $([math]::Round($cleanup.EligibleBytes / 1MB, 2)) MB. Simulation: no files were deleted.")
         } elseif ($cleanup) {
-            $lines.Add("Archivos borrados: $($cleanup.Deleted); omitidos: $($cleanup.Skipped); espacio recuperado estimado: $([math]::Round($cleanup.DeletedBytes / 1MB, 2)) MB. Esta estimación suma tamaños de archivo, no mide el espacio físico realmente recuperado.")
+            $lines.Add("Deleted files: $($cleanup.Deleted); skipped: $($cleanup.Skipped); estimated logical size removed: $([math]::Round($cleanup.DeletedBytes / 1MB, 2)) MB. This estimate sums file sizes and does not measure actual disk space reclaimed.")
         }
         $lines.Add('')
-        $lines.Add('## Tendencia y recomendaciones')
-        $lines.Add("- Alertas configuradas: RAM >= $($config.RamAlertPercent)%; disco libre <= $($config.DiskAlertPercent)%; persistencia: $($config.PersistentRuns) ejecuciones consecutivas.")
+        $lines.Add('## Trends and recommendations')
+        $lines.Add("- Configured alerts: RAM >= $($config.RamAlertPercent)%; free disk <= $($config.DiskAlertPercent)%; persistence: $($config.PersistentRuns) consecutive runs.")
         foreach ($recommendation in $recommendations) { $lines.Add("- $recommendation") }
         if ($metrics.Errors.Count -gt 0) {
             $lines.Add('')
-            $lines.Add('## Métricas no disponibles / errores')
+            $lines.Add('## Unavailable metrics / errors')
             foreach ($metricError in $metrics.Errors) { $lines.Add("- $metricError") }
         }
         if ($cleanup -and $cleanup.Errors.Count -gt 0) {
             $lines.Add('')
-            $lines.Add('## Elementos omitidos / errores de limpieza')
+            $lines.Add('## Skipped items / cleanup errors')
             foreach ($cleanupError in $cleanup.Errors) { $lines.Add("- $cleanupError") }
         }
         $reportPath = Join-Path $outputDir 'latest-report.md'
         if ($prior.Count -gt 0) {
             $previous = $prior[$prior.Count - 1]
             $trendIndex = $lines.IndexOf('## Tendencia y recomendaciones')
-            $lines.Insert($trendIndex, '## Comparación con la ejecución anterior')
+            $lines.Insert($trendIndex, '## Comparison with previous run')
             if ($null -ne $metrics.RamUsedPercent -and $null -ne $previous.RamUsedPercent) {
-                $lines.Insert($trendIndex + 1, ('- RAM utilizada: {0:N1}% frente a {1:N1}% (cambio {2:+0.0;-0.0;0.0} puntos).' -f $metrics.RamUsedPercent, $previous.RamUsedPercent, ($metrics.RamUsedPercent - $previous.RamUsedPercent)))
+                $lines.Insert($trendIndex + 1, ('- RAM used: {0:N1}% vs {1:N1}% (change {2:+0.0;-0.0;0.0} points).' -f $metrics.RamUsedPercent, $previous.RamUsedPercent, ($metrics.RamUsedPercent - $previous.RamUsedPercent)))
                 $trendIndex++
             }
             if ($null -ne $metrics.CpuPercent -and $null -ne $previous.CpuPercent) {
-                $lines.Insert($trendIndex + 1, ('- CPU media: {0:N1}% frente a {1:N1}% (cambio {2:+0.0;-0.0;0.0} puntos).' -f $metrics.CpuPercent, $previous.CpuPercent, ($metrics.CpuPercent - $previous.CpuPercent)))
+                $lines.Insert($trendIndex + 1, ('- Average CPU: {0:N1}% vs {1:N1}% (change {2:+0.0;-0.0;0.0} points).' -f $metrics.CpuPercent, $previous.CpuPercent, ($metrics.CpuPercent - $previous.CpuPercent)))
                 $trendIndex++
             }
             if ($null -ne $metrics.DiskFreePercent -and $null -ne $previous.DiskFreePercent) {
-                $lines.Insert($trendIndex + 1, ('- Disco libre: {0:N1}% frente a {1:N1}% (cambio {2:+0.0;-0.0;0.0} puntos).' -f $metrics.DiskFreePercent, $previous.DiskFreePercent, ($metrics.DiskFreePercent - $previous.DiskFreePercent)))
+                $lines.Insert($trendIndex + 1, ('- Free disk: {0:N1}% vs {1:N1}% (change {2:+0.0;-0.0;0.0} points).' -f $metrics.DiskFreePercent, $previous.DiskFreePercent, ($metrics.DiskFreePercent - $previous.DiskFreePercent)))
                 $trendIndex++
             }
-            if ($ramAlert -and -not $ramPersistent) { $lines.Insert($trendIndex + 1, '- La alerta de RAM no alcanza el número de ejecuciones consecutivas configurado; trátala como posible pico aislado por ahora.') }
-            if ($diskAlert -and -not $diskPersistent) { $lines.Insert($trendIndex + 1, '- La alerta de disco no alcanza el número de ejecuciones consecutivas configurado; comprueba si persiste.') }
+            if ($ramAlert -and -not $ramPersistent) { $lines.Insert($trendIndex + 1, '- The RAM alert has not reached the configured consecutive-run count; treat it as a possible isolated spike for now.') }
+            if ($diskAlert -and -not $diskPersistent) { $lines.Insert($trendIndex + 1, '- The disk alert has not reached the configured consecutive-run count; check whether it persists.') }
             $lines.Insert($trendIndex + 2, '')
         } else {
             $trendIndex = $lines.IndexOf('## Tendencia y recomendaciones')
-            $lines.Insert($trendIndex, '## Comparación con ejecuciones anteriores')
-            $lines.Insert($trendIndex + 1, '- No hay ejecuciones anteriores disponibles para comparar.')
+            $lines.Insert($trendIndex, '## Comparison with previous runs')
+            $lines.Insert($trendIndex + 1, '- No previous runs are available for comparison.')
             $lines.Insert($trendIndex + 2, '')
         }
         Write-AtomicUtf8File -Path $reportPath -Content $lines.ToArray()
@@ -770,7 +770,7 @@ function Invoke-Monitor {
             try {
                 & $htmlScript -InputJson $jsonPath -OutputHtml (Join-Path $outputDir 'latest-report.html') -StaleAfterMinutes ([int]$config.StaleAfterMinutes) -ErrorAction Stop | Out-Null
             } catch {
-                $metrics.Errors.Add("Informe HTML: $($_.Exception.Message)")
+                $metrics.Errors.Add("HTML report: $($_.Exception.Message)")
             }
         }
 
@@ -780,16 +780,16 @@ function Invoke-Monitor {
             if ($diskPersistent) { $alertText += 'disco persistentemente bajo' }
             Send-PersistentAlertToast -Message ($alertText -join '; ')
         }
-        Write-Output "Informe guardado: $reportPath"
+        Write-Output "Report saved: $reportPath"
         Write-Output $cleanupMessage
         if ($cleanup) {
-            Write-Output "Espacio libre en disco antes: $(if ($null -ne $metrics.DiskFreeBytes) { '{0:N2} GB' -f ($metrics.DiskFreeBytes / 1GB) } else { 'no disponible' })"
+            Write-Output "Free disk space before: $(if ($null -ne $metrics.DiskFreeBytes) { '{0:N2} GB' -f ($metrics.DiskFreeBytes / 1GB) } else { 'unavailable' })"
             $after = $null
             try {
                 $systemDrive = [IO.Path]::GetPathRoot($env:SystemDrive)
                 $after = Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID='" + $systemDrive.TrimEnd('\') + "'") -ErrorAction Stop
             } catch {}
-            Write-Output "Espacio libre en disco después: $(if ($after) { '{0:N2} GB' -f ([double]$after.FreeSpace / 1GB) } else { 'no disponible' })"
+            Write-Output "Free disk space after: $(if ($after) { '{0:N2} GB' -f ([double]$after.FreeSpace / 1GB) } else { 'unavailable' })"
         }
     } finally {
         if ($lock) { $lock.Dispose() }

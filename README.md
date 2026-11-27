@@ -1,49 +1,63 @@
-# Monitor de recursos de Windows
+# Windows Resource Monitor
 
 [![Windows tests](https://github.com/Ignacio-Charle/optimize/actions/workflows/ci.yml/badge.svg)](https://github.com/Ignacio-Charle/optimize/actions/workflows/ci.yml)
 
-Diagnóstico local de Windows 11 para RAM, CPU y disco, con historial y limpieza opt-in. PowerShell 5.1 compatible.
+A local Windows 11 monitor for RAM, CPU, and disk usage, with a local history and opt-in cleanup. Compatible with Windows PowerShell 5.1.
 
-## Qué genera
+## Output files
 
-- `reports/latest-report.md`: informe legible.
-- `reports/latest-report.json`: datos estructurados con estado de colectores y unidades inequívocas.
-- `reports/latest-report.html`: visor autónomo, responsivo y sin JavaScript.
-- `reports/history.jsonl`: historial local rotado; no se incluye en Git.
+- `reports/latest-report.md`: human-readable report.
+- `reports/latest-report.json`: structured metrics with explicit units and collector status.
+- `reports/latest-report.html`: standalone, responsive viewer with no JavaScript or external resources.
+- `reports/history.jsonl`: rotated local history; excluded from Git.
 
-La ejecución predeterminada es de solo informe. Nunca elimina archivos fuera de la política configurada.
+The default run only creates or updates monitor-owned reports. It does not delete files.
 
-## Uso
+## Usage
 
 ```powershell
-# Informe de solo lectura (modo predeterminado)
+# Read-only report (default)
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\MemoryMonitor.ps1
 
-# Simular la limpieza de temporales (nunca elimina archivos)
+# Simulate cleanup; never deletes files
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\MemoryMonitor.ps1 -Mode Simulate
 
-# Limpieza real manual, limitada por ruta validada, edad, exclusiones y omisión de reparse points
+# Manual cleanup, limited to the validated dedicated directory
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\MemoryMonitor.ps1 -Mode Clean
 
-# Vista previa sin borrado
+# Preview cleanup without deleting
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\MemoryMonitor.ps1 -Mode Clean -WhatIf
 
-# Pruebas de limpieza sobre carpetas temporales controladas
+# Run cleanup tests against controlled temporary fixtures
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Cleanup.Tests.ps1
 ```
 
-La tarea programada usa una sola tarea para el informe horario y la limpieza automática como máximo diaria. La limpieza solo se activa si existen archivos elegibles de al menos siete días y el espacio libre del disco está en/bajo el umbral o el total de temporales elegibles alcanza su umbral. Cambia esos valores en `MemoryMonitor.config.json`. La limpieza automática solo se desactiva con `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Disable-AutomaticCleanup.ps1`; esto conserva la tarea horaria en modo solo informe. Para eliminar toda la tarea, usa `Unregister-ScheduledTask -TaskName 'Informe de memoria del PC' -Confirm:$false`.
+The scheduled task runs one hourly report and performs cleanup at most once per day. Automatic cleanup requires eligible files at least seven days old and either low disk space or eligible temporary files reaching the configured size threshold. Change thresholds in `MemoryMonitor.config.json`.
 
-Instala o actualiza la tarea para el usuario actual, sin elevación:
+Disable automatic cleanup while keeping the hourly report:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Disable-AutomaticCleanup.ps1
+```
+
+Remove the scheduled task with:
+
+```powershell
+Unregister-ScheduledTask -TaskName 'Informe de memoria del PC' -Confirm:$false
+```
+
+Install or update the task for the current user without elevation:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-MemoryMonitorTask.ps1
 ```
 
-La tarea requiere que el usuario haya iniciado sesión; se ejecuta aunque VS Code esté cerrado. `StartWhenAvailable` permite recuperar ejecuciones perdidas al volver a estar disponible el equipo. Las notificaciones de Windows están desactivadas por defecto; al activarlas, solo se intentan para alertas persistentes de RAM o disco.
+The task runs as the interactive current user, at Limited run level, with `StartWhenAvailable` and `IgnoreNew` for concurrent instances. The user must be signed in. It can run while VS Code is closed. Windows notifications are disabled by default; when enabled, they are only attempted for persistent RAM or disk alerts.
 
-## Límites P0 de limpieza
+## Cleanup safety
 
-Por defecto ninguna ejecución limpia archivos. `-Mode Clean` requiere además `-CleanupEnabled` o `CleanupEnabled=true` en `MemoryMonitor.config.json`. Una ejecución automática sólo escribe en el directorio dedicado `<LOCALAPPDATA>\WindowsMemoryMonitor`, configurable como nombre simple. La limpieza general de `%TEMP%` queda fuera de la automatización horaria y sólo puede inspeccionarse con herramientas o pruebas locales.
+Cleanup is disabled by default. `-Mode Clean` also requires the explicit `-CleanupEnabled` switch or `CleanupEnabled=true` in the configuration. Automatic cleanup is limited to `<LOCALAPPDATA>\WindowsMemoryMonitor`; `CleanupRootName` may only be a simple directory name. General `%TEMP%` cleanup is not part of the scheduled workflow.
 
-Los límites iniciales son: 7 días, 500 elementos inspeccionados, 100 eliminaciones, 256 MiB de tamaño lógico acumulado y 10 segundos de presupuesto objetivo. `-WhatIf` genera la vista previa sin borrar. Toda operación revalida el candidato y los ancestros literales. Hay una ventana de carrera si otro proceso sustituye una ruta después de la comprobación; por eso una tarea sobre temporales modificables por terceros debe seguir simulada hasta disponer de una API atómica adecuada.
+Default limits: 7 days old, 500 inspected entries, 100 deletions, 256 MiB total logical file size, and a 10-second inspection budget. `-WhatIf` previews without deleting. The script revalidates the root and every candidate immediately before deletion. A race remains if another process replaces a path after validation; do not enable cleanup on trees that can be modified by untrusted processes.
+
+The deleted-byte total is a logical file-size estimate, not a measurement of actual disk-space reclaimed. Disk free space is reported separately as an observation.

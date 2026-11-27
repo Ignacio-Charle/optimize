@@ -3,7 +3,7 @@
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
-    if (-not $Condition) { throw "FALLO: $Message" }
+    if (-not $Condition) { throw "FAIL: $Message" }
 }
 
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ("MemoryMonitor-test-" + [guid]::NewGuid().ToString('N'))
@@ -29,25 +29,25 @@ try {
     (Get-Item -LiteralPath $outsideOldFile).LastWriteTime = (Get-Date).AddDays(-9)
 
     $simulation = Invoke-SafeTempCleanup -CleanupMode Simulate -RootPath $testRoot -AuthorizedRoot $testRoot -AgeDays 7
-    Assert-True ($simulation.Eligible -eq 1) 'solo el archivo antiguo no protegido debería ser elegible'
-    Assert-True (-not (Test-NoReparseAncestors -Path (Join-Path $junctionPath 'outside-old.tmp') -Root $testRoot)) 'un archivo alcanzado por junction debe fallar la comprobación de ancestros'
-    Assert-True ((Test-Path -LiteralPath $recentFile) -and (Test-Path -LiteralPath $oldFile)) 'la simulación no debe borrar archivos'
+    Assert-True ($simulation.Eligible -eq 1) 'only the old unprotected file should be eligible'
+    Assert-True (-not (Test-NoReparseAncestors -Path (Join-Path $junctionPath 'outside-old.tmp') -Root $testRoot)) 'a file reached through a junction must fail the ancestor check'
+    Assert-True ((Test-Path -LiteralPath $recentFile) -and (Test-Path -LiteralPath $oldFile)) 'simulation must not delete files'
     $real = Invoke-SafeTempCleanup -CleanupMode Clean -RootPath $testRoot -AuthorizedRoot $testRoot -AgeDays 7
-    Assert-True ($real.Deleted -eq 1) 'debería eliminar exactamente el archivo antiguo elegible'
-    Assert-True (-not (Test-Path -LiteralPath $oldFile)) 'el archivo antiguo debería haberse eliminado'
-    Assert-True (Test-Path -LiteralPath $recentFile) 'el archivo reciente debe conservarse'
-    Assert-True (Test-Path -LiteralPath $protectedFile) 'el archivo de caché debe conservarse'
-    Assert-True (Test-Path -LiteralPath $outsideOldFile) 'no debe seguir ni borrar archivos de un junction'
+    Assert-True ($real.Deleted -eq 1) 'exactly the eligible old file should be deleted'
+    Assert-True (-not (Test-Path -LiteralPath $oldFile)) 'the old file should have been deleted'
+    Assert-True (Test-Path -LiteralPath $recentFile) 'the recent file must be preserved'
+    Assert-True (Test-Path -LiteralPath $protectedFile) 'the cache file must be preserved'
+    Assert-True (Test-Path -LiteralPath $outsideOldFile) 'files behind a junction must not be followed or deleted'
 
     $rejected = $false
     try {
         Invoke-SafeTempCleanup -CleanupMode Clean -RootPath $outsideRoot -AuthorizedRoot $testRoot -AgeDays 7 | Out-Null
     } catch { $rejected = $true }
-    Assert-True $rejected 'debe rechazarse una ruta fuera de la raíz autorizada'
-    Write-Output 'PASS: simulación no destructiva, umbral de antigüedad, conservación de reciente/caché, omisión de junction y rechazo de ruta externa.'
+    Assert-True $rejected 'a path outside the authorized root must be rejected'
+    Write-Output 'PASS: non-destructive simulation, age threshold, recent/cache preservation, junction exclusion, and outside-path rejection.'
 } finally {
     if (Test-Path -LiteralPath $junctionPath) {
-        try { [IO.Directory]::Delete($junctionPath) } catch { Write-Warning "No se pudo retirar el junction de prueba: $($_.Exception.Message)" }
+        try { [IO.Directory]::Delete($junctionPath) } catch { Write-Warning "Could not remove test junction: $($_.Exception.Message)" }
     }
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $outsideRoot -Recurse -Force -ErrorAction SilentlyContinue

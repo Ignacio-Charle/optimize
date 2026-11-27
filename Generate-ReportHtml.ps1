@@ -32,14 +32,14 @@ if ($SyntheticExample) {
         }
         cleanup = [pscustomobject]@{ enabled=$false; mode='Blocked'; eligible=0; omitted=0; deleted=0; failed=0 }
         alerts = [pscustomobject]@{ ram=$false; disk=$false }
-        diagnosticIds = @('CPU: ejemplo sintético sin datos')
+        diagnosticIds = @('CPU: synthetic example contains no data')
     }
 } else {
-    if (-not (Test-Path -LiteralPath $InputJson -PathType Leaf)) { throw "No existe el informe JSON: $InputJson" }
+    if (-not (Test-Path -LiteralPath $InputJson -PathType Leaf)) { throw "JSON report not found: $InputJson" }
     $jsonText = [IO.File]::ReadAllText($InputJson, (New-Object Text.UTF8Encoding($false)))
-    if ([string]::IsNullOrWhiteSpace($jsonText)) { throw 'El informe JSON está vacío.' }
+    if ([string]::IsNullOrWhiteSpace($jsonText)) { throw 'The JSON report is empty.' }
     $report = $jsonText | ConvertFrom-Json
-    if ($report.schemaVersion -ne 1) { throw "Versión de esquema incompatible: $($report.schemaVersion)" }
+    if ($report.schemaVersion -ne 1) { throw "Incompatible schema version: $($report.schemaVersion)" }
 }
 
 try {
@@ -53,14 +53,14 @@ try {
 $ramStatus = [string]$report.collectors.ram.status
 $cpuStatus = [string]$report.collectors.cpu.status
 $diskStatus = [string]$report.collectors.disk.status
-$ram = if ($null -ne $report.collectors.ram.usedPct) { '{0:N1}%' -f [double]$report.collectors.ram.usedPct } else { 'Dato ausente' }
-$cpu = if ($null -ne $report.collectors.cpu.usedPct) { '{0:N1}% durante {1} s' -f [double]$report.collectors.cpu.usedPct,[int]$report.collectors.cpu.sampleSeconds } else { 'Dato ausente' }
-$disk = if ($null -ne $report.collectors.disk.freePct) { '{0:N1}% libre de {1:N2} GiB' -f [double]$report.collectors.disk.freePct,([double]$report.collectors.disk.totalBytes / 1GB) } else { 'Dato ausente' }
-$staleText = if ([bool]$report.stale) { 'ANTIGUO' } else { 'Actual' }
+$ram = if ($null -ne $report.collectors.ram.usedPct) { '{0:N1}%' -f [double]$report.collectors.ram.usedPct } else { 'Data unavailable' }
+$cpu = if ($null -ne $report.collectors.cpu.usedPct) { '{0:N1}% over {1} s' -f [double]$report.collectors.cpu.usedPct,[int]$report.collectors.cpu.sampleSeconds } else { 'Data unavailable' }
+$disk = if ($null -ne $report.collectors.disk.freePct) { '{0:N1}% free of {1:N2} GiB' -f [double]$report.collectors.disk.freePct,([double]$report.collectors.disk.totalBytes / 1GB) } else { 'Data unavailable' }
+$staleText = if ([bool]$report.stale) { 'STALE' } else { 'Current' }
 $statusText = [string]$report.status
 $localTimeText = try {
     ([datetimeoffset]::Parse([string]$report.timestampUtc).LocalDateTime.ToString('yyyy-MM-dd HH:mm:ss'))
-} catch { 'No disponible' }
+} catch { 'Unavailable' }
 $ramTotalGiB = if ($null -ne $report.collectors.ram.totalBytes) { [math]::Round([double]$report.collectors.ram.totalBytes / 1GB, 2) } else { $null }
 $ramAvailableGiB = if ($null -ne $report.collectors.ram.availableBytes) { [math]::Round([double]$report.collectors.ram.availableBytes / 1GB, 2) } else { $null }
 $diskTotalGiB = if ($null -ne $report.collectors.disk.totalBytes) { [math]::Round([double]$report.collectors.disk.totalBytes / 1GB, 2) } else { $null }
@@ -73,7 +73,7 @@ $html = @"
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
-<title>Monitor de recursos de Windows</title>
+<title>Windows Resource Monitor</title>
 <style>
 :root {
   color-scheme: light dark;
@@ -144,24 +144,24 @@ h2 { margin: 2rem 0 0.65rem; font-size: 1.15rem; }
 </head>
 <body>
 <main>
-<h1 tabindex="-1">Monitor de recursos de Windows</h1>
-<p class="meta"><time datetime="$(ConvertTo-HtmlText $report.timestampUtc)">$(ConvertTo-HtmlText $localTimeText)</time> (hora local) - <time datetime="$(ConvertTo-HtmlText $report.timestampUtc)">$(ConvertTo-HtmlText $report.timestampUtc)</time> UTC</p>
-<p class="status $(ConvertTo-HtmlText $statusText)"><span class="label">$(ConvertTo-HtmlText $statusText)</span> Datos: <strong>$staleText</strong></p>
+<h1 tabindex="-1">Windows Resource Monitor</h1>
+<p class="meta"><time datetime="$(ConvertTo-HtmlText $report.timestampUtc)">$(ConvertTo-HtmlText $localTimeText)</time> (local time) - <time datetime="$(ConvertTo-HtmlText $report.timestampUtc)">$(ConvertTo-HtmlText $report.timestampUtc)</time> UTC</p>
+<p class="status $(ConvertTo-HtmlText $statusText)"><span class="label">$(ConvertTo-HtmlText $statusText)</span> Data: <strong>$staleText</strong></p>
 <table class="resource-table">
-<caption>Resumen de recursos</caption>
-<thead><tr><th scope="col">Recurso</th><th scope="col">Estado</th><th scope="col">Valor</th></tr></thead>
+<caption>Resource summary</caption>
+<thead><tr><th scope="col">Resource</th><th scope="col">Status</th><th scope="col">Value</th></tr></thead>
 <tbody>
-<tr><th scope="row">RAM</th><td>$(ConvertTo-HtmlText $ramStatus)</td><td class="value">$ram<br><small>Disponible $(if ($null -ne $ramAvailableGiB) { $ramAvailableGiB } else { 'dato ausente' }) GiB de $(if ($null -ne $ramTotalGiB) { $ramTotalGiB } else { 'dato ausente' }) GiB</small></td></tr>
+<tr><th scope="row">RAM</th><td>$(ConvertTo-HtmlText $ramStatus)</td><td class="value">$ram<br><small>Available $(if ($null -ne $ramAvailableGiB) { $ramAvailableGiB } else { 'unavailable' }) GiB of $(if ($null -ne $ramTotalGiB) { $ramTotalGiB } else { 'unavailable' }) GiB</small></td></tr>
 <tr><th scope="row">CPU</th><td>$(ConvertTo-HtmlText $cpuStatus)</td><td class="value">$cpu</td></tr>
-<tr><th scope="row">Disco: $(ConvertTo-HtmlText $report.collectors.disk.systemVolume)</th><td>$(ConvertTo-HtmlText $diskStatus)</td><td class="value">$disk<br><small>Libre $(if ($null -ne $diskFreeGiB) { $diskFreeGiB } else { 'dato ausente' }) GiB de $(if ($null -ne $diskTotalGiB) { $diskTotalGiB } else { 'dato ausente' }) GiB</small></td></tr>
+<tr><th scope="row">Disk: $(ConvertTo-HtmlText $report.collectors.disk.systemVolume)</th><td>$(ConvertTo-HtmlText $diskStatus)</td><td class="value">$disk<br><small>Free $(if ($null -ne $diskFreeGiB) { $diskFreeGiB } else { 'unavailable' }) GiB of $(if ($null -ne $diskTotalGiB) { $diskTotalGiB } else { 'unavailable' }) GiB</small></td></tr>
 </tbody>
 </table>
-<h2>Limpieza</h2>
+<h2>Cleanup</h2>
 <div class="cleanup">
-<p>Activada: <strong>$(if ([bool]$report.cleanup.enabled) {'sí'} else {'no'})</strong> - Estado: $(ConvertTo-HtmlText $report.cleanup.mode).</p>
-<p>Elegibles: $(ConvertTo-HtmlText $report.cleanup.eligible); eliminados: $(ConvertTo-HtmlText $report.cleanup.deleted); omitidos: $(ConvertTo-HtmlText $report.cleanup.omitted); fallidos: $(ConvertTo-HtmlText $report.cleanup.failed).</p>
+<p>Enabled: <strong>$(if ([bool]$report.cleanup.enabled) {'yes'} else {'no'})</strong> - Status: $(ConvertTo-HtmlText $report.cleanup.mode).</p>
+<p>Eligible: $(ConvertTo-HtmlText $report.cleanup.eligible); deleted: $(ConvertTo-HtmlText $report.cleanup.deleted); skipped: $(ConvertTo-HtmlText $report.cleanup.omitted); failed: $(ConvertTo-HtmlText $report.cleanup.failed).</p>
 </div>
-<h2>Diagnóstico</h2>
+<h2>Diagnostics</h2>
 <div class="diagnostics">
 <ul>
 $(@($report.diagnosticIds | ForEach-Object { '<li>' + (ConvertTo-HtmlText $_) + '</li>' }) -join "`n")
@@ -189,11 +189,11 @@ try {
         [IO.File]::Move($tempOutput, $OutputHtml)
     }
 } catch [IO.IOException] {
-    if (Test-Path -LiteralPath $OutputHtml -PathType Leaf) { throw "No se pudo reemplazar '$OutputHtml': $($_.Exception.Message)" }
+    if (Test-Path -LiteralPath $OutputHtml -PathType Leaf) { throw "Could not replace '$OutputHtml': $($_.Exception.Message)" }
     throw
 } finally {
     if (Test-Path -LiteralPath $tempOutput -PathType Leaf) {
         Remove-Item -LiteralPath $tempOutput -Force -ErrorAction SilentlyContinue
     }
 }
-Write-Output "Informe HTML generado: $OutputHtml"
+Write-Output "HTML report generated: $OutputHtml"

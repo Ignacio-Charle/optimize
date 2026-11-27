@@ -7,10 +7,10 @@ Describe 'MemoryMonitor metrics and boundaries' {
 
     It 'converts KiB to exact 64-bit bytes and used percent' {
         $ram = Convert-RamMeasurement -TotalVisibleKiB 1048576 -AvailableKiB 262144
-        if ($ram.TotalBytes -ne 1073741824) { throw 'bytes total incorrectos' }
-        if ($ram.AvailableBytes -ne 268435456) { throw 'bytes disponibles incorrectos' }
-        if ($ram.UsedBytes -ne 805306368) { throw 'bytes usados incorrectos' }
-        if ($ram.UsedPct -ne 75.0) { throw 'porcentaje usado incorrecto' }
+        if ($ram.TotalBytes -ne 1073741824) { throw 'incorrect total bytes' }
+        if ($ram.AvailableBytes -ne 268435456) { throw 'incorrect available bytes' }
+        if ($ram.UsedBytes -ne 805306368) { throw 'incorrect used bytes' }
+        if ($ram.UsedPct -ne 75.0) { throw 'incorrect used percentage' }
     }
 
     It 'rejects invalid RAM measurements instead of publishing zero' {
@@ -21,7 +21,7 @@ Describe 'MemoryMonitor metrics and boundaries' {
         )) {
             $threw = $false
             try { & $case } catch { $threw = $true }
-            if (-not $threw) { throw 'una medición inválida no fue rechazada' }
+            if (-not $threw) { throw 'an invalid measurement was not rejected' }
         }
     }
 
@@ -32,7 +32,7 @@ Describe 'MemoryMonitor metrics and boundaries' {
         New-Item -ItemType Directory -Path $root -Force | Out-Null
         New-Item -ItemType Directory -Path $sibling -Force | Out-Null
         try {
-            if (Test-PathWithinRoot -Path (Join-Path $sibling 'sentinel.tmp') -Root $root) { throw 'se aceptó un prefijo hermano' }
+            if (Test-PathWithinRoot -Path (Join-Path $sibling 'sentinel.tmp') -Root $root) { throw 'a sibling path with a matching prefix was accepted' }
         } finally {
             Remove-Item -LiteralPath $parent -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -52,9 +52,9 @@ Describe 'HTML export' {
             $script = Join-Path $PSScriptRoot '..\Generate-ReportHtml.ps1'
             & $script -SyntheticExample -OutputHtml $out
             $html = [IO.File]::ReadAllText($out)
-            if ($html -notmatch 'Content-Security-Policy') { throw 'falta CSP' }
-            if ($html -notmatch 'Dato ausente') { throw 'falta estado vacío/parcial' }
-            if ($html -notmatch 'ejemplo sintético') { throw 'falta contenido sintético' }
+            if ($html -notmatch 'Content-Security-Policy') { throw 'missing CSP' }
+            if ($html -notmatch 'Data unavailable') { throw 'missing unavailable/partial state' }
+            if ($html -notmatch 'synthetic example') { throw 'missing synthetic content' }
         } finally {
             Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -84,8 +84,8 @@ Describe 'HTML export' {
 
                 & (Join-Path $PSScriptRoot '..\Generate-ReportHtml.ps1') -InputJson $json -OutputHtml $out
                 $html = [IO.File]::ReadAllText($out)
-                if ($html -match '<img\s') { throw 'se interpretó markup sin confiar' }
-                if ($html -notmatch '&lt;img') { throw 'el dato sintético no fue escapado' }
+                if ($html -match '<img\s') { throw 'untrusted markup was interpreted as HTML' }
+                if ($html -notmatch '&lt;img') { throw 'synthetic data was not escaped' }
             } finally {
                 Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
             }
